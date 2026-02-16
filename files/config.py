@@ -61,10 +61,12 @@ class Config:
 
     # Paper Trading
     PAPER_TRADING = True # Default to True for safety
+    PAPER_TRADING_INITIAL_BALANCE = 50.0  # Starting paper trading balance in USD
 
     # Paths
     DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
     STATE_FILE = os.path.join(DATA_DIR, "bot_state.json")
+    DB_FILE = os.path.join(DATA_DIR, "trades.db")
     LOG_FILE = os.path.join(DATA_DIR, "bot.log")
 
     # Ensure data directory exists

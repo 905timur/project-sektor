@@ -43,7 +43,24 @@ class StateManager:
                 "daily_api_cost": 0.0,
                 "last_reset_date": datetime.now().strftime("%Y-%m-%d")
             },
-            "watching": {} # Persistent watchlist for opportunities
+            "watching": {}, # Persistent watchlist for opportunities
+            "paper_trading": {
+                "initial_balance": Config.PAPER_TRADING_INITIAL_BALANCE,
+                "balance": Config.PAPER_TRADING_INITIAL_BALANCE,
+                "available_balance": Config.PAPER_TRADING_INITIAL_BALANCE,
+                "total_profit": 0.0,
+                "total_loss": 0.0,
+                "realized_pnl": 0.0,
+                "trades_executed": 0,
+                "winning_trades": 0,
+                "losing_trades": 0,
+                "positions": {
+                    "daily": None,
+                    "weekly": None
+                },
+                "trade_history": [],
+                "started_at": datetime.now().isoformat()
+            }
         }
 
     def save_state(self):
