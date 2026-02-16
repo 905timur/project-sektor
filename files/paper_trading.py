@@ -4,6 +4,7 @@ Tracks balance, positions, PnL, and provides detailed reporting.
 """
 import logging
 import time
+import random
 from datetime import datetime
 from typing import Dict, Optional, List
 from config import Config
@@ -80,9 +81,20 @@ class PaperTradingManager:
         """
         paper = self.state.state["paper_trading"]
         
+        # Calculate Slippage
+        # Random slippage between min and max (simulating volatility)
+        slippage_rate = random.uniform(Config.PAPER_SLIPPAGE_RATE_MIN, Config.PAPER_SLIPPAGE_RATE_MAX)
+        
         if side.lower() == "buy":
-            # Calculate cost
-            cost = quantity * price
+            # Slippage INCREASES buy price
+            execution_price = price * (1 + slippage_rate)
+            
+            # Calculate Fee (0.4% on total transaction value)
+            transaction_value = quantity * execution_price
+            fee = transaction_value * Config.PAPER_FEE_RATE
+            
+            # Total Cost = Transaction Value + Fee
+            cost = transaction_value + fee
             
             if cost > paper["available_balance"]:
                 logger.warning(f"⚠️ Insufficient paper balance: ${cost:.2f} > ${paper['available_balance']:.2f}")
@@ -92,15 +104,18 @@ class PaperTradingManager:
             paper["available_balance"] -= cost
             
             # Create position
+            # Note: stored 'cost' includes fees for accurate ROI calculation
             position = {
                 "symbol": symbol,
                 "side": side.lower(),
                 "quantity": quantity,
-                "entry_price": price,
+                "entry_price": execution_price,
+                "fee_paid": fee,
+                "slippage_rate": slippage_rate,
                 "cost": cost,
                 "stop_loss": stop_loss,
                 "take_profit": take_profit,
-                "highest_price": price,
+                "highest_price": execution_price,
                 "opened_at": time.time(),
                 "timeframe": timeframe
             }
@@ -108,7 +123,7 @@ class PaperTradingManager:
             paper["positions"][timeframe] = position
             paper["trades_executed"] += 1
             
-            logger.info(f"📈 PAPER BUY: {quantity:.6f} {symbol} @ ${price:.2f} = ${cost:.2f}")
+            logger.info(f"📈 PAPER BUY: {quantity:.6f} {symbol} @ ${execution_price:.2f} (Slip: {slippage_rate*100:.2f}%) | Fee: ${fee:.2f} | Total Cost: ${cost:.2f}")
             
         elif side.lower() == "sell":
             # Close position
@@ -117,9 +132,18 @@ class PaperTradingManager:
                 logger.warning(f"⚠️ No position to close for {timeframe}")
                 return {"success": False, "error": "No position to close"}
             
-            # Calculate proceeds and PnL
-            proceeds = quantity * price
-            entry_cost = position["cost"]
+            # Slippage DECREASES sell price
+            execution_price = price * (1 - slippage_rate)
+            
+            # Calculate Fee
+            transaction_value = quantity * execution_price
+            fee = transaction_value * Config.PAPER_FEE_RATE
+            
+            # Proceeds = Transaction Value - Fee
+            proceeds = transaction_value - fee
+            
+            # Calculate PnL
+            entry_cost = position["cost"]  # Includes entry fees
             pnl = proceeds - entry_cost
             pnl_percent = (pnl / entry_cost) * 100 if entry_cost > 0 else 0
             
@@ -142,7 +166,11 @@ class PaperTradingManager:
                 "side": "sell",
                 "quantity": quantity,
                 "entry_price": position["entry_price"],
-                "exit_price": price,
+                "exit_price": execution_price,
+                "fee_paid_entry": position.get("fee_paid", 0.0),
+                "fee_paid_exit": fee,
+                "slippage_rate_entry": position.get("slippage_rate", 0.0),
+                "slippage_rate_exit": slippage_rate,
                 "pnl": pnl,
                 "pnl_percent": pnl_percent,
                 "opened_at": position["opened_at"],
@@ -156,10 +184,17 @@ class PaperTradingManager:
             paper["positions"][timeframe] = None
             
             pnl_emoji = "🟢" if pnl >= 0 else "🔴"
-            logger.info(f"📉 PAPER SELL: {quantity:.6f} {symbol} @ ${price:.2f} = ${proceeds:.2f} | PnL: {pnl_emoji} ${pnl:.2f} ({pnl_percent:.2f}%)")
+            logger.info(f"📉 PAPER SELL: {quantity:.6f} {symbol} @ ${execution_price:.2f} (Slip: {slippage_rate*100:.2f}%) | Fee: ${fee:.2f} | Proceeds: ${proceeds:.2f} | PnL: {pnl_emoji} ${pnl:.2f} ({pnl_percent:.2f}%)")
         
         self.state.save_state()
-        return {"success": True, "side": side, "quantity": quantity, "price": price}
+        return {
+            "success": True, 
+            "side": side, 
+            "quantity": quantity, 
+            "price": execution_price, 
+            "slippage": slippage_rate,
+            "fee": fee if 'fee' in locals() else 0.0
+        }
     
     def update_position_prices(self, timeframe: str, current_price: float):
         """

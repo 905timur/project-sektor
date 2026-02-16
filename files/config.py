@@ -62,6 +62,11 @@ class Config:
     # Paper Trading
     PAPER_TRADING = True # Default to True for safety
     PAPER_TRADING_INITIAL_BALANCE = 50.0  # Starting paper trading balance in USD
+    
+    # Paper Trading Realism (Slippage & Fees)
+    PAPER_SLIPPAGE_RATE_MIN = 0.001  # 0.1% minimum slippage
+    PAPER_SLIPPAGE_RATE_MAX = 0.005  # 0.5% maximum slippage in volatile conditions
+    PAPER_FEE_RATE = 0.004           # 0.4% fee per trade (Crypto.com spot fee)
 
     # Paths
     DATA_DIR = os.path.join(os.path.dirname(__file__), "data")

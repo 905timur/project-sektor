@@ -1,23 +1,23 @@
 # Imbalance Trading Bot (Survival Mode)
 
-A Python-based crypto trading bot that identifies and trades "imbalance"
-patterns in cryptocurrency markets using a two-tier AI system. The bot is
-designed for capital preservation with strict risk controls.
+A Python-based crypto trading bot that identifies and trades **imbalance
+patterns** (Fair Value Gaps and Order Blocks) in cryptocurrency markets using
+AI-powered analysis. The bot is designed for capital preservation with strict
+risk controls.
 
 ## What This Bot Does
 
-This bot scans cryptocurrency markets for **imbalance patterns** — situations
-where price has moved significantly away from its equilibrium (e.g., extreme RSI
-readings, volume spikes, Bollinger Band breaches, or large deviations from the
-50-period EMA). When detected, it uses AI to analyze the opportunity and execute
-trades autonomously.
+This bot scans cryptocurrency markets for **imbalance patterns** — Fair Value
+Gaps (FVGs) and Order Blocks (OBs) where price is likely to retrace and reverse.
+When detected, it uses AI to analyze the opportunity and execute trades
+autonomously.
 
 ### Two Types of Imbalances
 
-| Type                 | Timeframe | Description                                        | Target Hold |
-| -------------------- | --------- | -------------------------------------------------- | ----------- |
-| **Daily Imbalance**  | 1D        | Price extended from EMA, RSI extreme, volume spike | 1-2 days    |
-| **Weekly Imbalance** | 1W        | Structural shift, support/resistance breach        | ~1 week     |
+| Type                 | Timeframe | Description                                             | Target Hold |
+| -------------------- | --------- | ------------------------------------------------------- | ----------- |
+| **Daily Imbalance**  | 1D        | FVG/OB on daily chart, scanned with 4H precision        | 1-2 days    |
+| **Weekly Imbalance** | 1W        | Major FVG/OB on weekly chart, scanned with 1D precision | ~1 week     |
 
 The bot can hold **one Daily position** and **one Weekly position
 simultaneously**.
@@ -40,46 +40,48 @@ The bot runs a continuous pipeline every 5 minutes. Here's the complete flow:
 │     └─> Check SL/TP for open daily & weekly positions                        │
 │     └─> Close if stop-loss or take-profit hit                               │
 │                                                                              │
-│  3. CHECK POSITION LIMITS                                                    │
-│     └─> If both daily & weekly positions open → skip scanning               │
+│  3. CHECK WATCHLIST (Priority)                                              │
+│     └─> For each tracked opportunity:                                       │
+│         │                                                                    │
+│         ├─► A. FETCH MULTI-TIMEFRAME DATA                                   │
+│         │    └─> Primary TF (1D/1W) + Context TF (4H/1D)                    │
+│         │    └─> Technical Indicators (RSI, BB, MACD, ATR, EMA, ADX)       │
+│         │                                                                    │
+│         ├─► B. CHECK RETRACEMENT                                            │
+│         │    └─> Has price entered the FVG/OB zone?                         │
+│         │    └─> If YES → Trigger Analysis                                  │
+│         │                                                                    │
+│         └─► C. OPUS ANALYSIS (Claude Opus 4.5)                             │
+│              └─> Format data as CSV (token efficient)                       │
+│              └─> Include market regime + S/R levels                         │
+│              └─> LLM returns JSON:                                          │
+│                  {                                                          │
+│                    "signal": "BUY"|"SELL"|"NEUTRAL",                       │
+│                    "confidence": "HIGH"|"MEDIUM"|"LOW",                    │
+│                    "imbalance_type": "DAILY"|"WEEKLY"|"NONE",              │
+│                    "scores": {...},                                         │
+│                    "reasoning": "...",                                      │
+│                    "entry_target": float,                                   │
+│                    "stop_loss": float,                                      │
+│                    "take_profit": float                                     │
+│                  }                                                          │
+│              └─> If signal != "BUY"/"SELL" OR confidence != "HIGH" → skip  │
+│              └─> Execute trade with regime-based position sizing            │
 │                                                                              │
-│  4. SCAN FOR OPPORTUNITIES                                                   │
+│  4. SCAN FOR NEW OPPORTUNITIES (if capacity exists)                         │
 │     └─> For each trading pair:                                              │
 │         │                                                                    │
 │         ├─► A. FETCH MARKET DATA                                            │
-│         │    └─> OHLCV + Technical Indicators (RSI, BB, MACD, ATR, EMA)   │
+│         │    └─> OHLCV + Technical Indicators                              │
 │         │                                                                    │
-│         ├─► B. TECHNICAL FILTER (Cost Saver)                               │
-│         │    └─> Check if ANY of:                                           │
-│         │        • RSI < 30 or > 70 (extreme)                             │
-│         │        • Price > 5% from EMA50 (extended)                        │
-│         │        • Volume > 2x 20-period SMA (spike)                       │
-│         │        • Bollinger Band breach                                   │
-│         │    └─> Must have RSI extreme + (volume spike OR BB breach OR    │
-│         │        extended)                                                  │
-│         │    └─> If NOT → skip this pair (saves API calls)                │
+│         ├─► B. DETECT IMBALANCE STRUCTURES                                  │
+│         │    └─> Fair Value Gaps (bullish/bearish)                         │
+│         │    └─> Order Blocks (bullish/bearish)                            │
+│         │    └─> If found → Add to Watchlist                               │
 │         │                                                                    │
-│         ├─► C. SONNET ANALYSIS (Claude 3.5 Sonnet)                        │
-│         │    └─> Format last 10 candles as CSV (token efficient)          │
-│         │    └─> Send to LLM with system prompt defining imbalance types  │
-│         │    └─> LLM returns JSON:                                          │
-│         │        {                                                          │
-│         │          "signal": "BUY"|"SELL"|"NEUTRAL",                       │
-│         │          "confidence": "HIGH"|"MEDIUM"|"LOW",                    │
-│         │          "imbalance_type": "DAILY"|"WEEKLY"|"NONE",              │
-│         │          "reasoning": "..."                                      │
-│         │          "entry_target": float,                                  │
-│         │          "stop_loss": float,                                     │
-│         │          "take_profit": float                                    │
-│         │        }                                                          │
-│         │    └─> If signal != "BUY" OR confidence != "HIGH" → skip        │
-│         │                                                                    │
-│         └─► D. EXECUTE TRADE (Autonomous)                                  │
-│              └─> Check spread safety (< 0.5%)                               │
-│              └─> Calculate position size (45% of capital)                │
-│              └─> Place market order (or post-only limit)                  │
-│              └─> Save position to state with SL/TP                         │
-│              └─> Send Telegram notification                                 │
+│         └─► C. FALLBACK EXTREME CHECK                                       │
+│              └─> RSI extreme + (volume spike OR extension)                  │
+│              └─> If found → Add to Watchlist                               │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -103,18 +105,16 @@ The bot runs a continuous pipeline every 5 minutes. Here's the complete flow:
   - **MACD (12,26,9)** - Trend momentum
   - **ATR (14)** - Average True Range for stop loss calculation
   - **EMA (50)** - Exponential moving average for extension calculation
+  - **ADX (14)** - Trend strength indicator
   - **Volume SMA (20)** - For volume spike detection
 
 ### AI Decision Making
 
 - **[Anthropic Claude](https://www.anthropic.com/)** - LLM for trading decisions
-  - **Claude 3.5 Sonnet** (`claude-3-5-sonnet-20240620`)
+  - **Claude Opus 4.5** (`claude-opus-4-5-20251101`)
     - Role: Opportunity Analyst
     - Task: Analyze market data, identify imbalances, output trade signals
     - Uses prompt caching for cost efficiency
-  - **Claude 3 Opus** (reserved for approval)
-    - Role: Risk Manager
-    - Task: Critique trades, provide final approval, adjust stop losses
 
 ### Notifications
 
@@ -127,43 +127,68 @@ The bot runs a continuous pipeline every 5 minutes. Here's the complete flow:
 
 ### Data Management
 
+- **SQLite Database** - Persistent storage for:
+  - Trade history with entry/exit details
+  - Market context snapshots
+  - Analysis data for each trade
+
 - **JSON state file** - Persistent storage for:
   - Capital tracking
   - Open positions (daily/weekly)
+  - Watchlist of opportunities
   - P&L performance
   - API cost tracking (daily/total)
+  - Paper trading state
 
 ---
 
-## Decision-Making Tools Explained
+## Key Features
 
-### 1. Technical Filter (Pre-LLM)
+### 1. Fair Value Gap (FVG) Detection
 
-Before spending money on LLM API calls, the bot uses simple technical checks:
+Detects unfilled price gaps where:
 
-| Indicator              | Threshold           | Purpose                                   |
-| ---------------------- | ------------------- | ----------------------------------------- |
-| RSI                    | < 30 or > 70        | Oversold/overbought conditions            |
-| Extension (from EMA50) | > 5%                | Price significantly extended from average |
-| Volume                 | > 2x 20-period SMA  | Unusual volume activity                   |
-| Bollinger Bands        | Price outside bands | Volatility squeeze/breakout               |
+- **Bullish FVG**: Candle 1 High < Candle 3 Low (gap up)
+- **Bearish FVG**: Candle 1 Low > Candle 3 High (gap down)
 
-**Logic:** Must have RSI extreme AND (volume spike OR BB breach OR extension)
+Minimum gap size: 0.1%
 
-### 2. Sonnet Analysis
+### 2. Order Block (OB) Detection
 
-The LLM receives:
+Identifies institutional order blocks:
 
-- Last 10 candles as CSV (columns: timestamp, open, high, low, close, volume,
-  rsi, atr, extension)
-- System prompt defining the two imbalance types
-- Returns structured JSON with signal, confidence, entry/stop/target
+- **Bullish OB**: Last bearish candle before a strong move up (>2x ATR)
+- **Bearish OB**: Last bullish candle before a strong move down (>2x ATR)
 
-### 3. Execution Filters
+### 3. Market Regime Detection
 
-- **Spread Check**: Bid-ask spread must be < 0.5%
-- **Position Size**: 45% of available capital per trade
-- **Max Positions**: 1 daily + 1 weekly (never more)
+Classifies market conditions for position sizing:
+
+- **TRENDING_UP**: ADX > 25, price above EMA50
+- **TRENDING_DOWN**: ADX > 25, price below EMA50
+- **VOLATILE**: ATR > 1.5x average ATR
+- **RANGING**: Default state
+
+### 4. Support/Resistance Identification
+
+Uses pivot point detection (5-candle window) to identify key levels for:
+
+- Take profit targets
+- Stop loss placement
+- Entry timing
+
+### 5. Multi-Timeframe Analysis
+
+| Position Type | Primary TF | Context TF |
+| ------------- | ---------- | ---------- |
+| Daily         | 1D         | 4H         |
+| Weekly        | 1W         | 1D         |
+
+### 6. Regime-Based Position Sizing
+
+- **Normal conditions**: 45% of capital per position
+- **Volatile market**: 22.5% (50% reduction)
+- **Counter-trend trades**: 22.5% (50% reduction)
 
 ---
 
@@ -190,6 +215,9 @@ PAIRS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "DOGE/USDT", "XRP/USDT", "ADA/USDT"
 # Timeframes
 TIMEFRAMES = {"daily": "1d", "weekly": "1w"}
 
+# Multi-Timeframe Context
+MULTI_TIMEFRAME_MAPPING = {"daily": "4h", "weekly": "1d"}
+
 # Position Sizing
 POSITION_SIZE_PERCENT = 0.45  # 45% per position
 
@@ -197,6 +225,18 @@ POSITION_SIZE_PERCENT = 0.45  # 45% per position
 SPREAD_LIMIT_PERCENT = 0.5
 COST_LIMIT_DAILY_USD = 1.00
 MAX_DRAWDOWN_WEEKLY_PERCENT = 0.10
+
+# Imbalance Detection
+IMBALANCE_PARAMS = {
+    "fvg_lookback": 20,
+    "ob_lookback": 50,
+    "min_fvg_size_percent": 0.5,
+    "retracement_threshold": 0.5
+}
+
+# Paper Trading
+PAPER_TRADING = True
+PAPER_TRADING_INITIAL_BALANCE = 50.0
 ```
 
 ---
@@ -232,7 +272,8 @@ TELEGRAM_CHAT_ID=your_chat_id
 python main.py
 ```
 
-The bot starts in **Paper Trading mode** by default. To enable real trading:
+The bot starts in **Paper Trading mode** by default with a $50 simulated
+balance. To enable real trading:
 
 ```python
 # In config.py, change:
@@ -245,45 +286,96 @@ PAPER_TRADING = False
 
 ```
 imbalance-bot/
-├── main.py              # Entry point, main loop
+├── main.py              # Entry point, main loop with session tracking
 ├── config.py            # All configuration parameters
 ├── strategy.py          # ImbalanceStrategy class - the brain
 ├── exchange_client.py   # CCXT wrapper for Crypto.com
-├── market_data.py       # OHLCV fetching + indicator calculation
+├── market_data.py       # OHLCV + indicators + FVG/OB detection
 ├── llm_client.py        # Anthropic API wrapper with cost tracking
 ├── state_manager.py     # JSON-based state persistence
+├── opportunity_tracker.py # Watchlist management for imbalances
+├── database.py          # SQLite trade logging
+├── paper_trading.py     # Paper trading simulation manager
 ├── telegram_bot.py      # Telegram notification handler
+├── analyze_trades.py    # Trade history analysis tool
 ├── requirements.txt     # Python dependencies
 └── data/
-    └── bot_state.json   # Persistent state file
+    ├── bot_state.json   # Persistent state file
+    └── trades.db        # SQLite trade database
 ```
 
 ---
 
 ## State Management
 
-The bot maintains state in [`data/bot_state.json`](data/bot_state.json):
+The bot maintains state in `data/bot_state.json`:
 
 ```json
 {
-   "capital": { "initial": 0, "current": 0, "currency": "USDT" },
-   "positions": {
-      "daily": null,
-      "weekly": null
-   },
-   "performance": {
-      "total_pnl": 0,
-      "win_count": 0,
-      "loss_count": 0,
-      "weekly_loss": 0
-   },
-   "costs": {
-      "total_api_cost": 0,
-      "daily_api_cost": 0,
-      "last_reset_date": "2024-01-01"
-   }
+  "capital": { "initial": 0, "current": 0, "currency": "USDT" },
+  "positions": {
+    "daily": null,
+    "weekly": null
+  },
+  "watching": {
+    "BTC/USDT_daily": {
+      "symbol": "BTC/USDT",
+      "timeframe": "daily",
+      "imbalance_type": "bullish",
+      "zone_top": 52000,
+      "zone_bottom": 51000,
+      "bias": "bullish",
+      "stage": "watching"
+    }
+  },
+  "performance": {
+    "total_pnl": 0,
+    "win_count": 0,
+    "loss_count": 0,
+    "weekly_loss": 0
+  },
+  "paper_trading": {
+    "initial_balance": 50.0,
+    "balance": 50.0,
+    "available_balance": 50.0,
+    "realized_pnl": 0.0,
+    "trades_executed": 0,
+    "winning_trades": 0,
+    "losing_trades": 0
+  },
+  "costs": {
+    "total_api_cost": 0,
+    "daily_api_cost": 0,
+    "last_reset_date": "2024-01-01"
+  }
 }
 ```
+
+---
+
+## Trade Database
+
+All trades are logged to SQLite (`data/trades.db`) with:
+
+| Field            | Description                 |
+| ---------------- | --------------------------- |
+| id               | Unique trade ID             |
+| symbol           | Trading pair                |
+| timeframe        | daily/weekly                |
+| side             | buy/sell                    |
+| entry_price      | Entry price                 |
+| exit_price       | Exit price (when closed)    |
+| size             | Position size               |
+| pnl              | Profit/loss in USD          |
+| pnl_percent      | Profit/loss percentage      |
+| entry_time       | Unix timestamp of entry     |
+| exit_time        | Unix timestamp of exit      |
+| stop_loss        | SL price                    |
+| take_profit      | TP price                    |
+| regime           | Market regime at entry      |
+| market_context   | JSON snapshot of indicators |
+| analysis_context | JSON of LLM analysis        |
+| status           | OPEN/CLOSED                 |
 
 ---
 
@@ -291,12 +383,13 @@ The bot maintains state in [`data/bot_state.json`](data/bot_state.json):
 
 1. **Bot starts** → Sends Telegram alert "Bot Started"
 2. **5-minute timer** → Pipeline runs
-3. **Technical filter** → Finds BTC/USDT with RSI 75 + volume spike
-4. **Sonnet analysis** → Returns
-   `{"signal": "BUY", "confidence": "HIGH", "entry_target": 52000, "stop_loss": 50000, "take_profit": 55000}`
-5. **Execution** → Checks spread (0.2%), places order, saves position
-6. **Next cycle** → Checks position → Price hit TP → Closes position, records
-   P&L, sends alert
+3. **Scan market** → Detects bullish FVG on BTC/USDT daily
+4. **Add to watchlist** → Tracks zone ($51,000 - $52,000)
+5. **Next cycle** → Price retraces into zone
+6. **Opus analysis** → Returns HIGH confidence BUY signal
+7. **Execution** → Checks regime (TRENDING_UP), calculates size, places order
+8. **Next cycles** → Monitors position for SL/TP
+9. **Exit** → Price hits TP → Closes position, logs to DB, sends alert
 
 ---
 
@@ -304,7 +397,46 @@ The bot maintains state in [`data/bot_state.json`](data/bot_state.json):
 
 The bot optimizes for low API costs:
 
-- **Technical filter** prevents unnecessary LLM calls (~90% of pairs filtered)
-- **CSV formatting** reduces tokens by 40-50% vs JSON
-- **Prompt caching** (Anthropic) gives 90% discount on cache reads
-- **Daily cost limit** ($1) prevents runaway spending
+- **Watchlist-based approach** - Only analyzes when price retraces into zones
+- **CSV formatting** - Reduces tokens by 40-50% vs JSON
+- **Prompt caching** (Anthropic) - 90% discount on cache reads
+- **Daily cost limit** ($1) - Prevents runaway spending
+- **Single model** - Uses Opus 4.5 for all analysis (simplified pipeline)
+
+---
+
+## Paper Trading
+
+The bot includes a comprehensive paper trading system:
+
+- **Simulated balance tracking** - Starting at $50 by default
+- **Position management** - Tracks paper positions separately
+- **P&L calculation** - Real-time profit/loss tracking
+- **Trade history** - Full history of simulated trades
+- **Periodic reports** - Every 30 minutes
+
+---
+
+## Logging
+
+The bot uses Eastern Time (ET) timestamps with trading session tracking:
+
+```
+2024-01-15 09:30:00 ET | 🇺🇸 NEW YORK | strategy - INFO - Running pipeline...
+```
+
+Sessions tracked:
+
+- 🌏 ASIA: 8 PM - 5 AM ET
+- 🇬🇧 LONDON: 3 AM - 8 AM ET
+- 🇬🇧🇺🇸 LONDON/NY OVERLAP: 8 AM - 1 PM ET
+- 🇺🇸 NEW YORK: 1 PM - 5 PM ET
+
+---
+
+## Additional Documentation
+
+- [`QUICK_START.md`](QUICK_START.md) - Quick start guide
+- [`OPTIMIZATION_GUIDE.md`](OPTIMIZATION_GUIDE.md) - Cost optimization
+  strategies
+- [`CHANGES_SUMMARY.md`](CHANGES_SUMMARY.md) - Recent changes summary

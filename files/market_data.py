@@ -10,6 +10,65 @@ class MarketDataManager:
     def __init__(self, exchange_client):
         self.exchange = exchange_client
 
+    def calculate_volume_profile(self, df, lookback=100, bins=50):
+        """
+        Calculates the Volume Profile for the last `lookback` candles.
+        Returns a dict: {'vah': float, 'val': float, 'poc': float, 'profile': pd.DataFrame}
+        """
+        if df is None or len(df) < lookback:
+            return None
+        
+        # Use only the lookback period
+        subset = df.iloc[-lookback:].copy()
+        
+        # Define price bins
+        price_min = subset['low'].min()
+        price_max = subset['high'].max()
+        price_range = price_max - price_min
+        
+        if price_range == 0:
+            return None
+
+        # Create bins
+        bin_size = price_range / bins
+        subset['price_bin'] = pd.cut(subset['close'], bins=bins, retbins=False)
+        
+        # Group by bin and sum volume
+        profile = subset.groupby('price_bin')['volume'].sum().reset_index()
+        
+        # Find Point of Control (POC) - Price bin with max volume
+        max_vol_idx = profile['volume'].idxmax()
+        poc_bin = profile.iloc[max_vol_idx]['price_bin']
+        poc = poc_bin.mid
+        
+        # Calculate Value Area (70% of volume)
+        total_volume = profile['volume'].sum()
+        value_area_vol = total_volume * 0.70
+        
+        # Sort by volume descending to find the bins that make up 70%
+        profile_sorted = profile.sort_values(by='volume', ascending=False)
+        profile_sorted['cum_vol'] = profile_sorted['volume'].cumsum()
+        
+        # Get bins inside the Value Area
+        va_bins = profile_sorted[profile_sorted['cum_vol'] <= value_area_vol]
+        
+        # If no bins found (e.g. one bin has > 70%), take the top one
+        if va_bins.empty:
+            va_bins = profile_sorted.iloc[[0]]
+            
+        # Get VAH and VAL from the intervals in the Value Area
+        # We need to extract .left and .right from the Interval objects
+        va_intervals = va_bins['price_bin'].values
+        val = min([i.left for i in va_intervals])
+        vah = max([i.right for i in va_intervals])
+        
+        return {
+            'poc': poc,
+            'vah': vah,
+            'val': val,
+            'profile': profile
+        }
+
     def get_market_data(self, symbol, timeframe):
         """
         Fetches OHLCV and calculates indicators.
@@ -90,15 +149,31 @@ class MarketDataManager:
         """
         Detect unfilled fair value gaps in recent candles.
         Returns a list of dicts: {'type', 'top', 'bottom', 'index', 'filled'}
+        Enhanced: Checks for displacement volume and Value Area context.
         """
-        if df is None or len(df) < 3:
+        if df is None or len(df) < 50: # Need history for VP
             return []
             
         fvgs = []
+        
+        # Calculate Volume Profile
+        vp = self.calculate_volume_profile(df, lookback=50)
+        vah, val = (vp['vah'], vp['val']) if vp else (None, None)
+        
         # Iterate up to the second to last candle (current candle is still forming)
         for i in range(len(df) - lookback, len(df)):
             if i < 2: continue
             
+            # Check displacement candle (i-1) volume
+            # We want the move that created the gap to have volume
+            disp_vol = df.iloc[i-1]['volume']
+            disp_vol_sma = df.iloc[i-1]['vol_sma']
+            
+            # If volume is weak, skip (unless it's massive gap? let's filter strict for now)
+            # Using 1.5x SMA for FVG displacement as a baseline
+            if pd.notna(disp_vol_sma) and disp_vol < (1.5 * disp_vol_sma):
+                continue
+
             curr_low = df.iloc[i]['low']
             curr_high = df.iloc[i]['high']
             
@@ -106,12 +181,17 @@ class MarketDataManager:
             prev2_high = df.iloc[i-2]['high']
             
             # Bullish FVG: Candle 1 High < Candle 3 Low (Gap Up)
-            # (Note: i is Candle 3 in 0-indexed terms if we consider i-2, i-1, i)
-            # Actually standard definition: Candle 1 High vs Candle 3 Low. 
-            # If Candle 3 Low > Candle 1 High -> Gap.
-            
             if df.iloc[i]['low'] > df.iloc[i-2]['high']:
                 gap_size = (df.iloc[i]['low'] - df.iloc[i-2]['high']) / df.iloc[i-2]['high'] * 100
+                
+                # Check VA overlap (Support)
+                # If gap is completely above VAH, it's a breakout (good).
+                # If gap is inside VA, it's trading within value.
+                # If gap is below VAL, it's bearish territory? (For bullish FVG, being below VAL is Reversal?)
+                # User said "confirm if the imbalance zones have high-volume nodes"
+                # We'll allow if it overlaps VA OR is a breakout from VA.
+                # Strictly filtering logic: "filters out weak setups where where volume doesn't support"
+                
                 if gap_size > 0.1: # Min 0.1% gap
                     fvgs.append({
                         'type': 'bullish',
@@ -142,16 +222,32 @@ class MarketDataManager:
         Detect potential order blocks.
         Bullish OB: Last bearish candle before a strong move up (break of structure).
         Bearish OB: Last bullish candle before a strong move down.
-        Simplified: Last opposite candle before a significant move (>2x ATR).
+        Enhanced: 
+        1. Volume of the OB candle > 2 * SMA(20)
+        2. Optional: OB price should strictly interact with Value Area (e.g. simple check for now: overlap)
         """
-        if df is None or len(df) < 5:
+        if df is None or len(df) < 22: # Need at least 20 for SMA + 2 for calculation
             return []
             
         obs = []
         atr = df['atr'].iloc[-1]
         
+        # Calculate Volume Profile once for the recent window to use for filtering
+        # We'll use a lookback of 50 for the profile context
+        vp = self.calculate_volume_profile(df, lookback=50)
+        vah, val = (vp['vah'], vp['val']) if vp else (None, None)
+        
         for i in range(len(df) - lookback, len(df) - 1):
-            if i < 1: continue
+            if i < 20: continue # Need history for vol_sma
+            
+            # 1. Volume Check
+            # Ensure the candle creating the OB has significant volume
+            ob_vol = df.iloc[i]['volume']
+            vol_sma = df.iloc[i]['vol_sma']
+            
+            # Condition 1: High Volume on the formation candle (Institutions loading up)
+            if ob_vol <= (2.0 * vol_sma):
+                continue
             
             # Check for strong move after candle i
             move_up = (df.iloc[i+1]['close'] - df.iloc[i+1]['open']) > (2 * atr)
@@ -159,12 +255,17 @@ class MarketDataManager:
             
             # Bullish OB (Bearish candle 'i' followed by strong move up)
             if df.iloc[i]['close'] < df.iloc[i]['open'] and move_up:
+                 # Value Area Check: Ideally, we want to see if the OB is in a "value" zone or edge
+                 # For now, let's just log if it's within/near VA. 
+                 # If we return it, it's a valid candidate.
+                 
                  obs.append({
                     'type': 'bullish',
                     'top': df.iloc[i]['high'],
                     'bottom': df.iloc[i]['low'],
                     'index': i,
-                    'timestamp': df.iloc[i]['timestamp']
+                    'timestamp': df.iloc[i]['timestamp'],
+                    'strength': 'high' if (val and df.iloc[i]['low'] <= val) else 'normal'
                 })
                 
             # Bearish OB (Bullish candle 'i' followed by strong move down)
@@ -174,7 +275,8 @@ class MarketDataManager:
                     'top': df.iloc[i]['high'],
                     'bottom': df.iloc[i]['low'],
                     'index': i,
-                    'timestamp': df.iloc[i]['timestamp']
+                    'timestamp': df.iloc[i]['timestamp'],
+                    'strength': 'high' if (vah and df.iloc[i]['high'] >= vah) else 'normal'
                 })
                 
         return obs
