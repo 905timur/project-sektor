@@ -1,0 +1,10 @@
+ccxt
+pandas
+pandas-ta
+scipy
+statsmodels
+anthropic
+python-telegram-bot
+python-dotenv
+tenacity
+requests
