@@ -4,6 +4,7 @@ import sys
 import os
 import json
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import anthropic
 
 # Add parent directory to path to import modules
@@ -14,11 +15,42 @@ from files.database import TradeDatabase
 from files.llm_client import LLMClient
 from files.state_manager import StateManager
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+
+def get_trading_session():
+    """Determine current trading session based on ET time."""
+    et = ZoneInfo("America/New_York")
+    now = datetime.now(et)
+    hour = now.hour
+    
+    if 20 <= hour or hour < 3:
+        return "🌏 ASIA"
+    elif 3 <= hour < 8:
+        return "🇬🇧 LONDON"
+    elif 8 <= hour < 13:
+        return "🇬🇧🇺🇸 LONDON/NY OVERLAP"
+    elif 13 <= hour < 17:
+        return "🇺🇸 NEW YORK"
+    else:
+        return "🇺🇸 NEW YORK (AFTERNOON)"
+
+
+class ETFormatter(logging.Formatter):
+    """Custom formatter that displays timestamps in Eastern Time with session info."""
+    
+    def formatTime(self, record, datefmt=None):
+        et = ZoneInfo("America/New_York")
+        dt = datetime.fromtimestamp(record.created, tz=et)
+        session = get_trading_session()
+        if datefmt:
+            return dt.strftime(datefmt)
+        return f"{dt.strftime('%Y-%m-%d %H:%M:%S ET')} | {session}"
+
+
+# Configure logging with ET time
+formatter = ETFormatter('%(asctime)s | %(name)s - %(levelname)s - %(message)s')
+handler = logging.StreamHandler(sys.stdout)
+handler.setFormatter(formatter)
+logging.basicConfig(level=logging.INFO, handlers=[handler])
 logger = logging.getLogger(__name__)
 
 class TradeAnalyzer:

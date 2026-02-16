@@ -1,21 +1,73 @@
 import time
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from strategy import ImbalanceStrategy
 from config import Config
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler(Config.LOG_FILE)
-    ]
-)
 
-logger = logging.getLogger(__name__)
+def get_trading_session():
+    """
+    Determine current trading session based on ET time.
+    
+    Session times in Eastern Time:
+    - Asia: 8 PM - 5 AM ET (Tokyo, Sydney)
+    - London: 3 AM - 12 PM ET
+    - New York: 8 AM - 5 PM ET
+    - London/NY Overlap: 8 AM - 12 PM ET
+    """
+    et = ZoneInfo("America/New_York")
+    now = datetime.now(et)
+    hour = now.hour
+    
+    if 20 <= hour or hour < 3:
+        return "🌏 ASIA"
+    elif 3 <= hour < 8:
+        return "🇬🇧 LONDON"
+    elif 8 <= hour < 13:
+        return "🇬🇧🇺🇸 LONDON/NY OVERLAP"
+    elif 13 <= hour < 17:
+        return "🇺🇸 NEW YORK"
+    else:
+        return "🇺🇸 NEW YORK (AFTERNOON)"
+
+
+class ETFormatter(logging.Formatter):
+    """Custom formatter that displays timestamps in Eastern Time with session info."""
+    
+    def formatTime(self, record, datefmt=None):
+        et = ZoneInfo("America/New_York")
+        dt = datetime.fromtimestamp(record.created, tz=et)
+        session = get_trading_session()
+        if datefmt:
+            return dt.strftime(datefmt)
+        return f"{dt.strftime('%Y-%m-%d %H:%M:%S ET')} | {session}"
+
+
+def setup_logging():
+    """Configure logging with ET timestamps and session tracking."""
+    # Create formatters
+    formatter = ETFormatter('%(asctime)s | %(name)s - %(levelname)s - %(message)s')
+    
+    # Create handlers
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(formatter)
+    
+    file_handler = logging.FileHandler(Config.LOG_FILE)
+    file_handler.setFormatter(formatter)
+    
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    root_logger.addHandler(console_handler)
+    root_logger.addHandler(file_handler)
+    
+    return root_logger
+
+
+# Setup logging with ET time
+logger = setup_logging()
 
 # Report interval in seconds (every 30 minutes)
 REPORT_INTERVAL = 1800
