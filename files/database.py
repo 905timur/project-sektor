@@ -47,6 +47,25 @@ class TradeDatabase:
                 )
             ''')
             
+            # Create screening_log table for DeepSeek pre-screening
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS screening_log (
+                    id TEXT PRIMARY KEY,
+                    timestamp REAL,
+                    symbol TEXT,
+                    timeframe TEXT,
+                    model TEXT,
+                    signal TEXT,
+                    confidence TEXT,
+                    reasoning TEXT,
+                    proceed INTEGER,
+                    prompt_tokens INTEGER,
+                    completion_tokens INTEGER,
+                    raw_response TEXT,
+                    escalated_to_opus INTEGER DEFAULT 0
+                )
+            ''')
+            
             conn.commit()
             conn.close()
             logger.info(f"Database initialized at {self.db_path}")
@@ -161,3 +180,75 @@ class TradeDatabase:
         except Exception as e:
             logger.error(f"Failed to fetch recent trades: {e}")
             return []
+    
+    def log_screening(self, data):
+        """
+        Logs a DeepSeek screening result.
+        data: dict containing screening details
+        Returns: screening_id for later escalation update
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            query = '''
+                INSERT INTO screening_log (
+                    id, timestamp, symbol, timeframe, model, signal, 
+                    confidence, reasoning, proceed, prompt_tokens, 
+                    completion_tokens, raw_response, escalated_to_opus
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            '''
+            
+            params = (
+                data.get('id') or str(time.time()),
+                data.get('timestamp', time.time()),
+                data.get('symbol'),
+                data.get('timeframe'),
+                data.get('model'),
+                data.get('signal'),
+                data.get('confidence'),
+                data.get('reasoning'),
+                1 if data.get('proceed') else 0,
+                data.get('prompt_tokens', 0),
+                data.get('completion_tokens', 0),
+                data.get('raw_response', '')
+            )
+            
+            cursor.execute(query, params)
+            conn.commit()
+            screening_id = params[0]
+            conn.close()
+            logger.info(f"Logged screening for {data.get('symbol')} ({data.get('signal')})")
+            return screening_id
+            
+        except Exception as e:
+            logger.error(f"Failed to log screening: {e}")
+            return None
+    
+    def update_screening_escalated(self, screening_id):
+        """
+        Updates a screening log entry to mark that it escalated to Opus.
+        screening_id: The ID of the screening log entry to update
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            query = '''
+                UPDATE screening_log 
+                SET escalated_to_opus = 1
+                WHERE id = ?
+            '''
+            
+            cursor.execute(query, (screening_id,))
+            
+            if cursor.rowcount == 0:
+                logger.warning(f"No screening log found with ID {screening_id} to update escalation.")
+            else:
+                conn.commit()
+                logger.info(f"Marked screening {screening_id} as escalated to Opus")
+                
+            conn.close()
+            
+        except Exception as e:
+            logger.error(f"Failed to update screening escalation: {e}")

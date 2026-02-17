@@ -51,30 +51,41 @@ The bot runs a continuous pipeline every 5 minutes. Here's the complete flow:
 │         │    └─> Has price entered the FVG/OB zone?                         │
 │         │    └─> If YES → Trigger Analysis                                  │
 │         │                                                                    │
-│         └─► C. OPUS ANALYSIS (Claude Opus 4.5)                             │
+│         ├─► C. DEEPSEEK SCREENING (DeepSeek R1 via OpenRouter)             │
+│         │    └─> Quick go/no-go decision (30s timeout)                     │
+│         │    └─> Format data as CSV (token efficient)                      │
+│         │    └─> Include market regime + S/R levels                         │
+│         │    └─> Returns: {signal, confidence, proceed_to_full_analysis}   │
+│         │    └─> Log screening result to database                           │
+│         │    └─> If proceed=true → Escalate to Opus                        │
+│         │    └─> If proceed=false → Skip Opus, stay on watchlist           │
+│         │                                                                    │
+│         └─► D. OPUS ANALYSIS (Claude Opus 4.5)                             │
+│              └─> Only if DeepSeek approved (proceed=true)                  │
 │              └─> Format data as CSV (token efficient)                       │
-│              └─> Include market regime + S/R levels                         │
+│              └─> Include market regime + S/R levels                          │
+│              └─> Fetch news sentiment (non-blocking, 15s timeout)           │
 │              └─> LLM returns JSON:                                          │
 │                  {                                                          │
 │                    "signal": "BUY"|"SELL"|"NEUTRAL",                       │
-│                    "confidence": "HIGH"|"MEDIUM"|"LOW",                    │
+│                    "confidence": "HIGH"|"MEDIUM"|"LOW",                     │
 │                    "imbalance_type": "DAILY"|"WEEKLY"|"NONE",              │
 │                    "scores": {...},                                         │
-│                    "reasoning": "...",                                      │
-│                    "entry_target": float,                                   │
+│                    "reasoning": "...",                                       │
+│                    "entry_target": float,                                    │
 │                    "stop_loss": float,                                      │
 │                    "take_profit": float                                     │
 │                  }                                                          │
-│              └─> If signal != "BUY"/"SELL" OR confidence != "HIGH" → skip  │
+│              └─> If signal != "BUY"/"SELL" OR confidence != "HIGH" → skip │
 │              └─> Execute trade with regime-based position sizing            │
 │                                                                              │
 │  4. SCAN FOR NEW OPPORTUNITIES (if capacity exists)                         │
-│     └─> For each trading pair:                                              │
+│     └─> For each trading pair:                                             │
 │         │                                                                    │
-│         ├─► A. FETCH MARKET DATA                                            │
+│         ├─► A. FETCH MARKET DATA                                           │
 │         │    └─> OHLCV + Technical Indicators                              │
 │         │                                                                    │
-│         ├─► B. DETECT IMBALANCE STRUCTURES                                  │
+│         ├─► B. DETECT IMBALANCE STRUCTURES                                 │
 │         │    └─> Fair Value Gaps (bullish/bearish)                         │
 │         │    └─> Order Blocks (bullish/bearish)                            │
 │         │    └─> If found → Add to Watchlist                               │
@@ -110,11 +121,29 @@ The bot runs a continuous pipeline every 5 minutes. Here's the complete flow:
 
 ### AI Decision Making
 
+- **[DeepSeek R1](https://deepseek.com/)** - Free LLM for pre-screening (via
+  OpenRouter)
+  - **Model**: `deepseek/deepseek-r1-0528:free`
+  - Role: Quick go/no-go screener
+  - Task: Determine if setup warrants full Opus analysis
+  - Timeout: 30 seconds (free tier)
+  - Cost: **FREE** (via OpenRouter)
+  - Falls back to Opus on timeout/failure
+
 - **[Anthropic Claude](https://www.anthropic.com/)** - LLM for trading decisions
   - **Claude Opus 4.5** (`claude-opus-4-5-20251101`)
-    - Role: Opportunity Analyst
+    - Role: Full Opportunity Analyst (only after DeepSeek approval)
     - Task: Analyze market data, identify imbalances, output trade signals
     - Uses prompt caching for cost efficiency
+
+### News Sentiment Analysis
+
+- **RSS News Client** - Real-time crypto news aggregation
+  - **Sources**: CoinTelegraph, CoinDesk, Decrypt, The Block, Bitcoin Magazine,
+    NewsBTC, CryptoPotato
+  - **Sentiment Analysis**: Bullish/bearish keyword detection
+  - **Integration**: News context added to LLM analysis prompts
+  - **Caching**: 5-minute in-memory cache for performance
 
 ### Notifications
 
@@ -190,6 +219,64 @@ Uses pivot point detection (5-candle window) to identify key levels for:
 - **Volatile market**: 22.5% (50% reduction)
 - **Counter-trend trades**: 22.5% (50% reduction)
 
+### 7. News Sentiment Integration
+
+Real-time news sentiment analysis integrated into trading decisions:
+
+- **7 RSS Sources**: CoinTelegraph, CoinDesk, Decrypt, The Block, Bitcoin
+  Magazine, NewsBTC, CryptoPotato
+- **Sentiment Detection**: Bullish/bearish keyword analysis with confidence
+  scoring
+- **Smart Filtering**: BTC-specific news for Bitcoin pairs, general crypto news
+  for others
+- **Non-Blocking**: 15-second timeout ensures news never delays trade execution
+- **Deduplication**: Jaccard similarity (0.8 threshold) removes duplicate
+  headlines
+
+Example news sentiment output in LLM prompt:
+
+```
+NEWS SENTIMENT (last 5 articles):
+Overall: BEARISH (MEDIUM confidence) | 23% bullish, 26% bearish
+Headlines:
+- Bitcoin remains under pressure near $68,000 even as panic ebbs (CoinDesk)
+- Top Expert Projects Bitcoin Bear Market To End In Less Than 365 Days (NewsBTC)
+...
+```
+
+### 8. DeepSeek Pre-Screening Layer
+
+Two-stage AI analysis for cost optimization:
+
+- **Stage 1 - DeepSeek R1 (Free)**:
+  - Quick go/no-go decision before expensive Opus call
+  - Uses `deepseek/deepseek-r1-0528:free` via OpenRouter
+  - 30-second timeout (free tier)
+  - Returns: signal, confidence, proceed_to_full_analysis
+  - Logs screening result to database
+  - Falls back to Opus on timeout/failure
+
+- **Stage 2 - Claude Opus 4.5**:
+  - Only called if DeepSeek approves (proceed=true)
+  - Full analysis with news sentiment
+  - More expensive but more thorough
+
+**Screening Logic**:
+
+| DeepSeek Signal | Confidence  | Action            |
+| --------------- | ----------- | ----------------- |
+| BUY/SELL        | HIGH/MEDIUM | Proceed to Opus   |
+| BUY/SELL        | LOW         | Stay on watchlist |
+| NEUTRAL         | Any         | Stay on watchlist |
+| Timeout/Failure | -           | Fall back to Opus |
+
+**Logging Prefixes**:
+
+- 🔍 DeepSeek approved - escalating to Opus
+- ⏭️ DeepSeek screened out - Opus skipped
+- ⚠️ DeepSeek failed - falling back to Opus
+- 💬 DeepSeek reasoning output
+
 ---
 
 ## Risk Protections
@@ -258,8 +345,9 @@ Create a `.env` file in the parent directory with:
 CRYPTO_COM_API_KEY=your_api_key
 CRYPTO_COM_API_SECRET=your_api_secret
 
-# AI Provider
+# AI Providers
 ANTHROPIC_API_KEY=your_anthropic_key
+OPENROUTER_API_KEY=your_openrouter_key  # For DeepSeek screening (free)
 
 # Notifications
 TELEGRAM_BOT_TOKEN=your_bot_token
@@ -291,7 +379,8 @@ imbalance-bot/
 ├── strategy.py          # ImbalanceStrategy class - the brain
 ├── exchange_client.py   # CCXT wrapper for Crypto.com
 ├── market_data.py       # OHLCV + indicators + FVG/OB detection
-├── llm_client.py        # Anthropic API wrapper with cost tracking
+├── llm_client.py        # Anthropic API wrapper with cost tracking + news integration
+├── news_client.py       # RSS news aggregator with sentiment analysis
 ├── state_manager.py     # JSON-based state persistence
 ├── opportunity_tracker.py # Watchlist management for imbalances
 ├── database.py          # SQLite trade logging
@@ -377,6 +466,26 @@ All trades are logged to SQLite (`data/trades.db`) with:
 | analysis_context | JSON of LLM analysis        |
 | status           | OPEN/CLOSED                 |
 
+### Screening Log
+
+DeepSeek screening results are also logged to SQLite (`data/trades.db`):
+
+| Field             | Description                       |
+| ----------------- | --------------------------------- |
+| id                | Unique screening ID               |
+| timestamp         | Unix timestamp                    |
+| symbol            | Trading pair                      |
+| timeframe         | daily/weekly                      |
+| model             | Model used (deepseek-r1)          |
+| signal            | BUY/SELL/NEUTRAL                  |
+| confidence        | HIGH/MEDIUM/LOW                   |
+| reasoning         | Brief explanation                 |
+| proceed           | 1 if approved for Opus, 0 if not  |
+| prompt_tokens     | Token count (logged, not charged) |
+| completion_tokens | Token count (logged, not charged) |
+| raw_response      | Full model JSON response          |
+| escalated_to_opus | 1 if Opus was called, 0 if not    |
+
 ---
 
 ## Example Flow
@@ -397,11 +506,12 @@ All trades are logged to SQLite (`data/trades.db`) with:
 
 The bot optimizes for low API costs:
 
+- **DeepSeek pre-screening** - Free tier filters out weak setups before Opus
 - **Watchlist-based approach** - Only analyzes when price retraces into zones
 - **CSV formatting** - Reduces tokens by 40-50% vs JSON
 - **Prompt caching** (Anthropic) - 90% discount on cache reads
 - **Daily cost limit** ($1) - Prevents runaway spending
-- **Single model** - Uses Opus 4.5 for all analysis (simplified pipeline)
+- **Dual model** - DeepSeek (free) → Opus (paid) only when approved
 
 ---
 

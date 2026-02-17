@@ -4,8 +4,10 @@ import pandas as pd
 import sys
 import os
 
-# Add project root to path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add project root and files directory to path
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
+sys.path.insert(0, os.path.join(project_root, 'files'))
 
 from strategy import ImbalanceStrategy
 from opportunity_tracker import OpportunityTracker
@@ -36,6 +38,10 @@ class TestStrategyFlow(unittest.TestCase):
         self.strategy.market_data.get_multi_timeframe_data = MagicMock()
         self.strategy.market_data.detect_fair_value_gaps = MagicMock()
         self.strategy.market_data.detect_order_blocks = MagicMock()
+        
+        # Mock database methods
+        self.strategy.db.log_screening = MagicMock()
+        self.strategy.db.update_screening_escalated = MagicMock()
 
     def tearDown(self):
         if os.path.exists("test_state.json"):
@@ -89,6 +95,15 @@ class TestStrategyFlow(unittest.TestCase):
         # Run pipeline (should hit check_watchlist_item)
         print("Running Pipeline for Retracement...")
         
+        # Mock DeepSeek screening to approve
+        self.mock_llm.screen_with_deepseek.return_value = {
+            "signal": "BUY",
+            "confidence": "HIGH",
+            "reasoning": "Good setup detected",
+            "proceed_to_full_analysis": True,
+            "screening_id": "test_screening_123"
+        }
+        
         # Mock LLM analysis to approve
         self.mock_llm.analyze_opportunity.return_value = {
             "signal": "BUY",
@@ -101,9 +116,13 @@ class TestStrategyFlow(unittest.TestCase):
         
         self.strategy.run_pipeline()
         
-        # Verify LLM was called
+        # Verify DeepSeek screening was called
+        self.mock_llm.screen_with_deepseek.assert_called_once()
+        print("Phase 2a Passed: DeepSeek screening triggered.")
+        
+        # Verify LLM was called (after DeepSeek approved)
         self.mock_llm.analyze_opportunity.assert_called_once()
-        print("Phase 2 Passed: LLM Analysis triggered.")
+        print("Phase 2b Passed: Opus Analysis triggered after DeepSeek approval.")
         
         # Verify Trade Execution
         # check if state now has a position

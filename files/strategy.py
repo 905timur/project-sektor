@@ -10,6 +10,7 @@ from state_manager import StateManager
 from opportunity_tracker import OpportunityTracker
 from database import TradeDatabase
 from paper_trading import PaperTradingManager
+from news_client import RSSNewsClient
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,12 @@ class ImbalanceStrategy:
         # Initialize clients
         self.exchange = ExchangeClient()
         self.market_data = MarketDataManager(self.exchange)
-        self.llm = LLMClient(self.state)
+        
+        # Initialize news client for sentiment analysis
+        self.news_client = RSSNewsClient()
+        logger.info("📰 RSS News Client initialized for sentiment analysis")
+        
+        self.llm = LLMClient(self.state, news_client=self.news_client)
         self.telegram = TelegramBot()
         
         # Initialize paper trading if enabled
@@ -90,7 +96,59 @@ class ImbalanceStrategy:
                 'sr_levels': sr_levels
             }
             
+            # === Stage 1: DeepSeek Screening ===
+            screening = self.llm.screen_with_deepseek(symbol, tf_name, df_dict, context_extras)
+            
+            if not screening:
+                logger.warning(f"⚠️ DeepSeek screening failed for {symbol} - falling back to Opus")
+                # Fallback to Opus on complete failure
+                screening = {"proceed_to_full_analysis": True, "screening_id": None}
+            
+            # Log screening result to database
+            screening_id = screening.get('screening_id')
+            if screening_id:
+                self.db.log_screening({
+                    'id': screening_id,
+                    'symbol': symbol,
+                    'timeframe': tf_name,
+                    'model': Config.DEEPSEEK_MODEL,
+                    'signal': screening.get('signal', 'NEUTRAL'),
+                    'confidence': screening.get('confidence', 'LOW'),
+                    'reasoning': screening.get('reasoning', ''),
+                    'proceed': 1 if screening.get('proceed_to_full_analysis') else 0,
+                    'prompt_tokens': screening.get('prompt_tokens', 0),
+                    'completion_tokens': screening.get('completion_tokens', 0),
+                    'raw_response': screening.get('raw_response', '')
+                })
+            
+            # Log reasoning
+            reasoning = screening.get('reasoning', 'No reasoning provided')
+            logger.info(f"💬 DeepSeek ({symbol}): {reasoning}")
+            
+            # Check if we should proceed to Opus
+            if not screening.get('proceed_to_full_analysis'):
+                signal = screening.get('signal', 'NEUTRAL')
+                confidence = screening.get('confidence', 'LOW')
+                logger.info(f"⏭️ DeepSeek screened out {symbol} ({signal} / {confidence}) - Opus skipped")
+                
+                # Leave on watchlist if NEUTRAL or LOW confidence BUY/SELL
+                if signal == 'NEUTRAL':
+                    pass  # Keep watching
+                elif confidence == 'LOW':
+                    pass  # Keep watching, might improve
+                else:
+                    # Shouldn't happen given proceed logic, but handle it
+                    self.tracker.remove_opportunity(symbol, tf_name)
+                return
+            
+            # === Stage 2: Opus Analysis ===
+            logger.info(f"🔍 DeepSeek approved {symbol} ({screening.get('signal')} / {screening.get('confidence')}) - escalating to Opus")
+            
             analysis = self.llm.analyze_opportunity(symbol, tf_name, df_dict, context_extras)
+            
+            # Update screening log that we escalated to Opus
+            if screening_id:
+                self.db.update_screening_escalated(screening_id)
             
             if not analysis:
                 return

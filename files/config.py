@@ -11,6 +11,12 @@ class Config:
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+    
+    # --- OpenRouter API for DeepSeek Screening ---
+    OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+    OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+    DEEPSEEK_MODEL = "deepseek/deepseek-r1-0528:free"
+    DEEPSEEK_TIMEOUT = 30  # seconds — free tier can be slow
 
     # --- Models ---
     ANALYSIS_MODEL = "claude-opus-4-5-20251101"
