@@ -82,18 +82,67 @@ class ImbalanceStrategy:
         
         # Check Retracement Logic
         if self.tracker.check_retracement(symbol, tf_name, current_candle):
-            # Ready for Analysis!
-            logger.info(f"⚡ Triggering Analysis for {symbol} ({tf_name}) - Retracement Confirmed")
-            
-            # Phase 2: Add Regime and Context
             primary_df = df_dict['primary']
+            opp        = self.tracker.watching.get(f"{symbol}_{tf_name}", {})
+            bias       = opp.get('bias', 'bullish')
+
+            # ── Gate A: Rejection Candle ─────────────────────────────────────
+            rejection = self.market_data.detect_rejection_candle(primary_df, bias)
+
+            if not rejection['detected']:
+                logger.info(
+                    f"⏳ No rejection candle yet for {symbol} ({tf_name}) — "
+                    f"price closed in zone but no pattern (bias={bias}). "
+                    f"Waiting for next candle."
+                )
+                return   # Stay on watchlist, re-check next cycle
+
+            logger.info(
+                f"🕯️ Rejection candle detected: {symbol} ({tf_name}) "
+                f"Pattern={rejection['pattern']}, WickRatio={rejection['wick_ratio']}"
+            )
+
+            # ── Gate B: Volume Spike ──────────────────────────────────────────
+            latest_candle = primary_df.iloc[-1]
+            candle_volume = latest_candle.get('volume', 0)
+            vol_sma       = latest_candle.get('vol_sma', 0)
+
+            if vol_sma and vol_sma > 0:
+                volume_ratio = candle_volume / vol_sma
+                if volume_ratio < 1.3:
+                    logger.info(
+                        f"📉 Volume gate failed for {symbol} ({tf_name}) — "
+                        f"rejection candle volume {volume_ratio:.2f}x avg (need ≥1.3x). "
+                        f"Waiting for confirmed volume."
+                    )
+                    return   # Stay on watchlist, re-check next cycle
+
+                logger.info(
+                    f"📊 Volume confirmed: {symbol} ({tf_name}) "
+                    f"{volume_ratio:.2f}x average — proceeding to DeepSeek."
+                )
+            else:
+                logger.warning(
+                    f"⚠️ vol_sma not available for {symbol}, skipping volume gate."
+                )
+
+            # ── Both gates passed → escalate ─────────────────────────────────
+            logger.info(
+                f"⚡ Entry gates passed for {symbol} ({tf_name}): "
+                f"candle_close_in_zone=True, "
+                f"rejection={rejection['pattern']}, "
+                f"volume_confirmed=True — triggering analysis."
+            )
+
             regime = self.market_data.detect_market_regime(primary_df)
             sr_levels = self.market_data.identify_support_resistance(primary_df)
             
             # Add to analysis context
             context_extras = {
                 'regime': regime,
-                'sr_levels': sr_levels
+                'sr_levels': sr_levels,
+                'rejection_pattern': rejection['pattern'],
+                'rejection_wick_ratio': rejection['wick_ratio']
             }
             
             # === Stage 1: DeepSeek Screening ===
@@ -296,7 +345,8 @@ class ImbalanceStrategy:
             
             # Notify
             regime_msg = f"Regime: {position_data['regime']}"
-            msg = f"[PAPER] Opened {timeframe.upper()} position for {symbol}\nSize: {quantity:.4f}\nEntry: ${current_price:.2f}\nSL: ${stop_loss}\nTP: ${take_profit}\nSignal: {analysis.get('signal')}\n{regime_msg}"
+            pattern_msg = f"\nPattern: {context_extras.get('rejection_pattern', 'N/A')} (wick ratio: {context_extras.get('rejection_wick_ratio', 'N/A')})"
+            msg = f"[PAPER] Opened {timeframe.upper()} position for {symbol}\nSize: {quantity:.4f}\nEntry: ${current_price:.2f}\nSL: ${stop_loss}\nTP: ${take_profit}\nSignal: {analysis.get('signal')}\n{regime_msg}{pattern_msg}"
             logger.info(msg)
             self.telegram.send_alert("Paper Trade Executed 📝", msg, "TRADE")
             
@@ -356,7 +406,8 @@ class ImbalanceStrategy:
                 
                 # Notify
                 regime_msg = f"Regime: {position_data['regime']}"
-                msg = f"Opened {timeframe.upper()} position for {symbol}\nSize: {quantity:.4f}\nEntry: {current_price}\nSL: {stop_loss}\nTP: {take_profit}\nSignal: {analysis.get('signal')}\n{regime_msg}"
+                pattern_msg = f"\nPattern: {context_extras.get('rejection_pattern', 'N/A')} (wick ratio: {context_extras.get('rejection_wick_ratio', 'N/A')})"
+                msg = f"Opened {timeframe.upper()} position for {symbol}\nSize: {quantity:.4f}\nEntry: {current_price}\nSL: {stop_loss}\nTP: {take_profit}\nSignal: {analysis.get('signal')}\n{regime_msg}{pattern_msg}"
                 logger.info(msg)
                 self.telegram.send_alert("Trade Executed 🚀", msg, "TRADE")
 

@@ -50,7 +50,7 @@ class OpportunityTracker:
         self.state.save_watching_opportunities(self.watching)
         logger.info(f"👀 Added to Watchlist: {symbol} ({timeframe}) - Zone: {opportunity['zone_bottom']}-{opportunity['zone_top']}")
 
-    def check_retracement(self, symbol, timeframe, current_tick):
+    def check_retracement(self, symbol, timeframe, current_candle):
         """
         Checks if price has retraced into the imbalance zone.
         Returns True if ready for Analysis.
@@ -61,39 +61,38 @@ class OpportunityTracker:
         if not opp:
             return False
             
-        current_price = current_tick['close']
+        candle_close = current_candle['close']
+        candle_low   = current_candle['low']
+        candle_high  = current_candle['high']
         
         # Bullish Setup: Waiting for price to drop INTO zone
         if opp['bias'] == 'bullish':
-            # Check for invalidation first (price dropped BELOW zone)
-            if current_price < opp['zone_bottom']:
-                logger.info(f"❌ Opportunity Invalidated (Price below zone): {symbol}")
+            # Invalidation: Candle closed BELOW zone
+            if candle_close < opp['zone_bottom']:
+                logger.info(f"❌ Zone Invalidated — Candle closed BELOW zone: {symbol} (Close: {candle_close:.4f})")
                 self.remove_opportunity(symbol, timeframe)
                 return False
                 
-            # Check for retracement (Price <= Top AND Price >= Bottom)
-            # Actually we want it to dip INTO the zone.
-            if current_price <= opp['zone_top']:
+            # Retracement: Candle must CLOSE inside the zone
+            if opp['zone_bottom'] <= candle_close <= opp['zone_top']:
                 # Calculate depth
                 zone_range = opp['zone_top'] - opp['zone_bottom']
-                penetration = (opp['zone_top'] - current_price) / zone_range
+                penetration = (opp['zone_top'] - candle_close) / zone_range
                 
-                # We want at least some penetration, e.g. top 10% of zone cleared
-                # Config might have specific threshold
-                logger.info(f"🎯 Retracement Detected: {symbol} inside zone (Depth: {penetration:.0%})")
+                logger.info(f"🕯️ Candle CLOSED inside zone: {symbol} (Close: {candle_close:.4f}, Zone: {opp['zone_bottom']:.4f}-{opp['zone_top']:.4f})")
                 return True
                 
         # Bearish Setup: Waiting for price to rise INTO zone
         elif opp['bias'] == 'bearish':
-             # Check for invalidation (price rose ABOVE zone)
-            if current_price > opp['zone_top']:
-                logger.info(f"❌ Opportunity Invalidated (Price above zone): {symbol}")
+             # Invalidation: Candle closed ABOVE zone
+            if candle_close > opp['zone_top']:
+                logger.info(f"❌ Zone Invalidated — Candle closed ABOVE zone: {symbol} (Close: {candle_close:.4f})")
                 self.remove_opportunity(symbol, timeframe)
                 return False
                 
-            # Check for retracement (Price >= Bottom AND Price <= Top)
-            if current_price >= opp['zone_bottom']:
-                logger.info(f"🎯 Retracement Detected: {symbol} inside zone")
+            # Retracement: Candle must CLOSE inside the zone
+            if opp['zone_bottom'] <= candle_close <= opp['zone_top']:
+                logger.info(f"🕯️ Candle CLOSED inside zone: {symbol} (Close: {candle_close:.4f}, Zone: {opp['zone_bottom']:.4f}-{opp['zone_top']:.4f})")
                 return True
                 
         return False

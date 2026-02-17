@@ -281,6 +281,120 @@ class MarketDataManager:
                 
         return obs
 
+    def detect_rejection_candle(self, df, bias: str) -> dict:
+        """
+        Inspects the most recent completed candle for rejection patterns
+        appropriate to the given bias direction.
+
+        For BULLISH bias (price dropping into a support/FVG zone), valid patterns:
+          - Hammer / Pin Bar:     lower wick >= 2x candle body, small upper wick
+          - Bullish Engulfing:    current close > prev open AND current open < prev close
+                                  (current body fully engulfs previous bearish body)
+          - Dragonfly Doji:       open ≈ close (body < 0.3% of candle range),
+                                  long lower wick
+
+        For BEARISH bias (price rising into a resistance/FVG zone), valid patterns:
+          - Shooting Star:        upper wick >= 2x candle body, small lower wick
+          - Bearish Engulfing:    current close < prev open AND current open > prev close
+          - Gravestone Doji:      open ≈ close (body < 0.3% of candle range),
+                                  long upper wick
+
+        Returns a dict:
+        {
+          "detected": True | False,
+          "pattern":  str  (e.g. "hammer", "bullish_engulfing", "shooting_star", etc.)
+                           or "none" if not detected,
+          "wick_ratio": float  (wick / body ratio, useful for logging)
+        }
+        """
+        if df is None or len(df) < 2:
+            return {"detected": False, "pattern": "none", "wick_ratio": 0.0}
+
+        candle  = df.iloc[-1]   # most recent candle
+        prev    = df.iloc[-2]   # previous candle
+
+        o = candle['open']
+        h = candle['high']
+        l = candle['low']
+        c = candle['close']
+
+        body        = abs(c - o)
+        candle_range = h - l
+        if candle_range == 0:
+            return {"detected": False, "pattern": "none", "wick_ratio": 0.0}
+
+        upper_wick  = h - max(o, c)
+        lower_wick  = min(o, c) - l
+        body_pct    = body / candle_range  # body as fraction of total range
+
+        # --- BULLISH PATTERNS ---
+        if bias == 'bullish':
+
+            # Hammer / Pin Bar
+            # Criteria: lower wick >= 2x body, upper wick <= 0.3x body, body exists
+            if body > 0 and lower_wick >= 2.0 * body and upper_wick <= 0.3 * body:
+                return {
+                    "detected": True,
+                    "pattern": "hammer",
+                    "wick_ratio": round(lower_wick / body, 2)
+                }
+
+            # Dragonfly Doji
+            # Criteria: body < 30% of range, lower wick > 60% of range
+            if body_pct < 0.30 and (lower_wick / candle_range) > 0.60:
+                return {
+                    "detected": True,
+                    "pattern": "dragonfly_doji",
+                    "wick_ratio": round(lower_wick / candle_range, 2)
+                }
+
+            # Bullish Engulfing
+            # Criteria: prev candle bearish, current candle bullish and body engulfs prev body
+            prev_bearish  = prev['close'] < prev['open']
+            curr_bullish  = c > o
+            engulfs       = o <= prev['close'] and c >= prev['open']
+            if prev_bearish and curr_bullish and engulfs:
+                return {
+                    "detected": True,
+                    "pattern": "bullish_engulfing",
+                    "wick_ratio": round(body / candle_range, 2)
+                }
+
+        # --- BEARISH PATTERNS ---
+        elif bias == 'bearish':
+
+            # Shooting Star
+            # Criteria: upper wick >= 2x body, lower wick <= 0.3x body, body exists
+            if body > 0 and upper_wick >= 2.0 * body and lower_wick <= 0.3 * body:
+                return {
+                    "detected": True,
+                    "pattern": "shooting_star",
+                    "wick_ratio": round(upper_wick / body, 2)
+                }
+
+            # Gravestone Doji
+            # Criteria: body < 30% of range, upper wick > 60% of range
+            if body_pct < 0.30 and (upper_wick / candle_range) > 0.60:
+                return {
+                    "detected": True,
+                    "pattern": "gravestone_doji",
+                    "wick_ratio": round(upper_wick / candle_range, 2)
+                }
+
+            # Bearish Engulfing
+            # Criteria: prev candle bullish, current candle bearish and body engulfs prev body
+            prev_bullish  = prev['close'] > prev['open']
+            curr_bearish  = c < o
+            engulfs       = o >= prev['close'] and c <= prev['open']
+            if prev_bullish and curr_bearish and engulfs:
+                return {
+                    "detected": True,
+                    "pattern": "bearish_engulfing",
+                    "wick_ratio": round(body / candle_range, 2)
+                }
+
+        return {"detected": False, "pattern": "none", "wick_ratio": 0.0}
+
     def detect_market_regime(self, df):
         """
         Classify market as TRENDING_UP, TRENDING_DOWN, RANGING, or VOLATILE.

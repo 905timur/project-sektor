@@ -373,6 +373,8 @@ Return ONLY valid JSON:
   "proceed_to_full_analysis": true | false
 }
 
+Note: A rejection candle pattern and volume spike (≥1.3x average) have already been confirmed on the most recent candle inside the imbalance zone before this screening request was triggered. Your job is to evaluate whether the broader market context, trend alignment, and risk/reward support taking this trade.
+
 Rules:
 - proceed_to_full_analysis = true ONLY when signal is BUY or SELL AND confidence is HIGH or MEDIUM
 - If unclear or no clear setup, return NEUTRAL with proceed_to_full_analysis = false"""
