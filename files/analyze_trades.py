@@ -14,24 +14,7 @@ from files.config import Config
 from files.database import TradeDatabase
 from files.llm_client import LLMClient
 from files.state_manager import StateManager
-
-
-def get_trading_session():
-    """Determine current trading session based on ET time."""
-    et = ZoneInfo("America/New_York")
-    now = datetime.now(et)
-    hour = now.hour
-    
-    if 20 <= hour or hour < 3:
-        return "🌏 ASIA"
-    elif 3 <= hour < 8:
-        return "🇬🇧 LONDON"
-    elif 8 <= hour < 13:
-        return "🇬🇧🇺🇸 LONDON/NY OVERLAP"
-    elif 13 <= hour < 17:
-        return "🇺🇸 NEW YORK"
-    else:
-        return "🇺🇸 NEW YORK (AFTERNOON)"
+from files.utils import get_trading_session
 
 
 class ETFormatter(logging.Formatter):

@@ -6,11 +6,12 @@ from market_data import MarketDataManager
 from llm_client import LLMClient
 from telegram_bot import TelegramBot
 from state_manager import StateManager
-from state_manager import StateManager
 from opportunity_tracker import OpportunityTracker
 from database import TradeDatabase
 from paper_trading import PaperTradingManager
 from news_client import RSSNewsClient
+from session_stats import SessionStats
+from utils import get_trading_session
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,10 @@ class ImbalanceStrategy:
         
         self.llm = LLMClient(self.state, news_client=self.news_client)
         self.telegram = TelegramBot()
+        
+        # Initialize session stats
+        self.session_stats = SessionStats()
+        self.session_stats.reset(get_trading_session())
         
         # Initialize paper trading if enabled
         self.paper_trading = None
@@ -95,6 +100,7 @@ class ImbalanceStrategy:
                     f"price closed in zone but no pattern (bias={bias}). "
                     f"Waiting for next candle."
                 )
+                self.session_stats.rejected_candle += 1
                 return   # Stay on watchlist, re-check next cycle
 
             logger.info(
@@ -115,6 +121,7 @@ class ImbalanceStrategy:
                         f"rejection candle volume {volume_ratio:.2f}x avg (need ≥1.3x). "
                         f"Waiting for confirmed volume."
                     )
+                    self.session_stats.rejected_volume += 1
                     return   # Stay on watchlist, re-check next cycle
 
                 logger.info(
@@ -133,6 +140,9 @@ class ImbalanceStrategy:
                 f"rejection={rejection['pattern']}, "
                 f"volume_confirmed=True — triggering analysis."
             )
+            
+            # Count this opportunity as entering the AI analysis pipeline
+            self.session_stats.zones_entered += 1
 
             regime = self.market_data.detect_market_regime(primary_df)
             sr_levels = self.market_data.identify_support_resistance(primary_df)
@@ -188,6 +198,7 @@ class ImbalanceStrategy:
                 else:
                     # Shouldn't happen given proceed logic, but handle it
                     self.tracker.remove_opportunity(symbol, tf_name)
+                self.session_stats.rejected_deepseek += 1
                 return
             
             # === Stage 2: Opus Analysis ===
@@ -209,6 +220,7 @@ class ImbalanceStrategy:
                 self.tracker.remove_opportunity(symbol, tf_name)
             else:
                 logger.info(f"Opus rejected {symbol}: {analysis.get('reasoning')}")
+                self.session_stats.rejected_opus += 1
                 if analysis.get("signal") == "NEUTRAL":
                     pass 
                 else:
@@ -399,6 +411,9 @@ class ImbalanceStrategy:
             }
             self.db.log_trade_entry(db_entry)
             
+            # Count executed trade
+            self.session_stats.trades_executed += 1
+            
             # Log updated report
             self.paper_trading.log_report()
             
@@ -472,6 +487,9 @@ class ImbalanceStrategy:
                     "reason": analysis.get("reasoning", "Signal")
                 }
                 self.db.log_trade_entry(db_entry)
+                
+                # Count executed trade
+                self.session_stats.trades_executed += 1
 
             except Exception as e:
                 logger.error(f"Execution failed: {e}")

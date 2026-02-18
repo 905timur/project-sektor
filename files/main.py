@@ -5,32 +5,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from strategy import ImbalanceStrategy
 from config import Config
-
-
-def get_trading_session():
-    """
-    Determine current trading session based on ET time.
-    
-    Session times in Eastern Time:
-    - Asia: 8 PM - 5 AM ET (Tokyo, Sydney)
-    - London: 3 AM - 12 PM ET
-    - New York: 8 AM - 5 PM ET
-    - London/NY Overlap: 8 AM - 12 PM ET
-    """
-    et = ZoneInfo("America/New_York")
-    now = datetime.now(et)
-    hour = now.hour
-    
-    if 20 <= hour or hour < 3:
-        return "🌏 ASIA"
-    elif 3 <= hour < 8:
-        return "🇬🇧 LONDON"
-    elif 8 <= hour < 13:
-        return "🇬🇧🇺🇸 LONDON/NY OVERLAP"
-    elif 13 <= hour < 17:
-        return "🇺🇸 NEW YORK"
-    else:
-        return "🇺🇸 NEW YORK (AFTERNOON)"
+from utils import get_trading_session
 
 
 class ETFormatter(logging.Formatter):
@@ -91,9 +66,32 @@ def main():
     last_report_time = time.time()
     pipeline_count = 0
 
+    # Initialize session tracking
+    current_session = get_trading_session()
+
     try:
         while True:
             try:
+                # Check for session change
+                new_session = get_trading_session()
+                
+                if new_session != current_session:
+                    # Session has changed — send the report for the session that just ended
+                    try:
+                        report = strategy.session_stats.format_telegram()
+                        strategy.telegram.send_alert(
+                            f"Session Ended: {current_session}",
+                            report,
+                            "INFO"
+                        )
+                        logger.info(f"📊 Session report sent for {current_session}")
+                    except Exception as e:
+                        logger.warning(f"Failed to send session report: {e}")
+                    
+                    # Reset stats for the new session
+                    strategy.session_stats.reset(new_session)
+                    current_session = new_session
+                
                 pipeline_count += 1
                 logger.info(f"Running pipeline... (cycle #{pipeline_count})")
                 strategy.run_pipeline()
@@ -125,6 +123,18 @@ def main():
         if Config.PAPER_TRADING and strategy.paper_trading:
             logger.info("📊 Final Trading Report:")
             strategy.paper_trading.log_report()
+        
+        # Send final partial session report
+        try:
+            report = strategy.session_stats.format_telegram()
+            strategy.telegram.send_alert(
+                f"🛑 Bot Stopped — Partial Session: {current_session}",
+                report,
+                "INFO"
+            )
+        except Exception as e:
+            logger.warning(f"Could not send shutdown session report: {e}")
+        
         strategy.telegram.send_alert("Bot Stopped", "User manually stopped the bot.", "INFO")
 
 def _log_live_trading_report(strategy):
