@@ -772,6 +772,35 @@ class ImbalanceStrategy:
                 trade_id = pos.get("order_id") or f"PAPER_{time.time()}"
                 self.db.update_trade_exit(str(trade_id), exit_data)
                 
+                # --- Self-Reflection: Generate Belief Update ---
+                try:
+                    # Build a trade record dict from what we know at close time
+                    trade_record = {
+                        "symbol": pos["symbol"],
+                        "timeframe": timeframe,
+                        "side": pos.get("side", "buy"),
+                        "entry_price": pos.get("entry_price", 0),
+                        "exit_price": exit_price,
+                        "pnl": pnl,
+                        "pnl_percent": pnl_percent,
+                        "exit_reason": reason,
+                        "regime": pos.get("regime", pos.get("regime_at_entry", "UNKNOWN")),
+                        "reason": pos.get("reason", ""),
+                        "analysis_context": pos.get("analysis_context", {})
+                    }
+                    belief = self.llm.generate_belief_update(trade_record)
+                    if belief:
+                        self.llm.belief_manager.add_belief(belief)
+                        logger.info(f"🧠 Belief recorded: {belief['belief'][:80]}...")
+                        self.telegram.send_alert(
+                            "🧠 New Belief",
+                            f"{pos['symbol']} ({belief['outcome']}): {belief['belief']}",
+                            "INFO"
+                        )
+                except Exception as e:
+                    logger.warning(f"Belief generation failed silently: {e}")
+                # --- End Self-Reflection ---
+                
                 msg = f"[PAPER] Closed {timeframe} position: {pos['symbol']}\nReason: {reason}\nPnL: ${pnl:+.2f} ({pnl_percent:+.2f}%)"
                 logger.info(msg)
                 self.telegram.send_alert("Paper Position Closed", msg, "SUCCESS" if pnl > 0 else "WARNING")
@@ -809,6 +838,35 @@ class ImbalanceStrategy:
              self.db.update_trade_exit(str(trade_id), exit_data)
         else:
              logger.warning(f"Could not log exit for {pos['symbol']} - No Order ID found.")
+        
+        # --- Self-Reflection: Generate Belief Update ---
+        try:
+            # Build a trade record dict from what we know at close time
+            trade_record = {
+                "symbol": pos["symbol"],
+                "timeframe": timeframe,
+                "side": pos.get("side", "buy"),
+                "entry_price": pos["entry_price"],
+                "exit_price": exit_price,
+                "pnl": pnl,
+                "pnl_percent": pnl_percent,
+                "exit_reason": reason,
+                "regime": pos.get("regime", pos.get("regime_at_entry", "UNKNOWN")),
+                "reason": pos.get("reason", ""),
+                "analysis_context": pos.get("analysis_context", {})
+            }
+            belief = self.llm.generate_belief_update(trade_record)
+            if belief:
+                self.llm.belief_manager.add_belief(belief)
+                logger.info(f"🧠 Belief recorded: {belief['belief'][:80]}...")
+                self.telegram.send_alert(
+                    "🧠 New Belief",
+                    f"{pos['symbol']} ({belief['outcome']}): {belief['belief']}",
+                    "INFO"
+                )
+        except Exception as e:
+            logger.warning(f"Belief generation failed silently: {e}")
+        # --- End Self-Reflection ---
         
         msg = f"Closed {timeframe} position: {pos['symbol']}\nReason: {reason}\nPnL: ${pnl:.2f} ({pnl_percent:.2f}%)"
         self.telegram.send_alert("Position Closed", msg, "SUCCESS" if pnl > 0 else "WARNING")

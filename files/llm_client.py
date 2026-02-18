@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 from typing import Dict, Any, Optional, TYPE_CHECKING
 from config import Config
 from state_manager import StateManager
+from belief_manager import BeliefManager
 
 if TYPE_CHECKING:
     from news_client import RSSNewsClient
@@ -23,7 +24,10 @@ class LLMClient:
         self.client = anthropic.Anthropic(api_key=Config.ANTHROPIC_API_KEY)
         self.state_manager = state_manager
         self.news_client = news_client
-
+        
+        # Belief manager for self-reflection
+        self.belief_manager = BeliefManager()
+        
         # Cached system prompts (built once, reused with caching)
         self._analysis_system_prompt = None
         self._approval_system_prompt = None
@@ -312,7 +316,28 @@ Rules:
         
         balance_line = f"CURRENT ACCOUNT BALANCE: ${capital:.2f} USDT\n\n"
         
-        user_message = f"{balance_line}Analyze this market data for {symbol} ({timeframe}):\\nPRIMARY TIMEFRAME:\\n{primary_csv}{context_str}{extras_str}{news_section}"
+        # --- Self-Reflection: Inject relevant beliefs ---
+        beliefs_section = ""
+        try:
+            regime = None
+            setup_type = None
+            if context_extras:
+                regime = context_extras.get('regime')
+                setup_type = context_extras.get('rejection_pattern')  # FVG, OB, etc.
+            
+            beliefs_text = self.belief_manager.format_for_prompt(
+                symbol=symbol,
+                timeframe=timeframe,
+                regime=regime,
+                setup_type=setup_type
+            )
+            if beliefs_text:
+                beliefs_section = f"\n\nYOUR PAST TRADE REFLECTIONS (most relevant first):\n{beliefs_text}\n\nConsider these beliefs when evaluating this setup. They represent lessons from your own trading history."
+        except Exception as e:
+            logger.warning(f"Could not load beliefs: {e}")
+        # --- End Self-Reflection ---
+        
+        user_message = f"{balance_line}{beliefs_section}Analyze this market data for {symbol} ({timeframe}):\\nPRIMARY TIMEFRAME:\\n{primary_csv}{context_str}{extras_str}{news_section}"
         
         try:
             message = self.client.messages.create(
@@ -864,3 +889,115 @@ Rules:
                 "confidence": "LOW",
                 "thesis_intact": True
             }
+    
+    def generate_belief_update(self, trade_record: dict) -> dict | None:
+        """
+        Given a fully closed trade record, ask Opus to write one belief update
+        in its own voice reflecting on what it learned from this trade.
+        
+        Args:
+            trade_record: dict with keys: symbol, timeframe, side, entry_price, 
+                         exit_price, pnl, pnl_percent, exit_reason, regime, 
+                         reason, analysis_context
+        
+        Returns:
+            dict ready for BeliefManager.add_belief() or None on failure
+        """
+        # Extract fields from trade_record with graceful defaults
+        symbol = trade_record.get("symbol", "UNKNOWN")
+        timeframe = trade_record.get("timeframe", "unknown")
+        side = trade_record.get("side", "buy")
+        entry_price = trade_record.get("entry_price", 0)
+        exit_price = trade_record.get("exit_price", 0)
+        pnl = trade_record.get("pnl", 0)
+        pnl_percent = trade_record.get("pnl_percent", 0)
+        exit_reason = trade_record.get("exit_reason", "Unknown")
+        regime = trade_record.get("regime", trade_record.get("regime_at_entry", "UNKNOWN"))
+        entry_reason = trade_record.get("reason", "")
+        analysis_context = trade_record.get("analysis_context", {})
+        
+        # Determine outcome string
+        if pnl > 0:
+            outcome = "WIN"
+        elif pnl < 0:
+            outcome = "LOSS"
+        else:
+            outcome = "BREAKEVEN"
+        
+        # Build user message with trade details
+        opus_reasoning = analysis_context.get("reasoning", "No analysis context available") if analysis_context else "No analysis context available"
+        
+        user_message = f"""Closed trade record:
+Symbol: {symbol} ({timeframe})
+Side: {side}
+Result: {outcome} | ${pnl:+.2f} ({pnl_percent:+.2f}%)
+Entry Reason: {entry_reason}
+Exit Reason: {exit_reason}
+Regime at Entry: {regime}
+Opus Reasoning at Entry: {opus_reasoning}
+
+Write a belief update. What did this trade confirm or challenge about your approach?
+What specific condition will you look for differently next time?"""
+        
+        # System prompt for belief generation
+        system_prompt = """You are a self-reflective trading agent reviewing your own closed trade.
+Write a single, specific belief update in first-person based on what this trade taught you.
+Be concrete — reference the specific symbol, regime, pattern, and what you would do differently (or the same) next time.
+Avoid generic statements like 'I should be more careful'. Instead say exactly what condition to look for or avoid.
+Return ONLY valid JSON.
+
+Expected JSON format:
+{
+  "belief": "First-person reflection string (2-4 sentences, specific and actionable)",
+  "tags": ["list", "of", "1-4", "short", "keyword", "tags"],
+  "confidence_in_belief": "HIGH" | "MEDIUM" | "LOW"
+}"""
+        
+        try:
+            message = self.client.messages.create(
+                model=Config.ANALYSIS_MODEL,
+                max_tokens=300,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_message}]
+            )
+            
+            self._track_cost(Config.ANALYSIS_MODEL, message.usage)
+            
+            response_text = message.content[0].text
+            
+            # Parse JSON response
+            start = response_text.find('{')
+            end = response_text.rfind('}') + 1
+            
+            if start != -1 and end != -1:
+                json_str = response_text[start:end]
+                result = json.loads(json_str)
+                
+                belief_text = result.get("belief", "")
+                tags = result.get("tags", [])
+                confidence = result.get("confidence_in_belief", "MEDIUM")
+                
+                # Build complete belief dict
+                belief_dict = {
+                    "id": f"belief_{int(time.time())}",
+                    "timestamp": time.time(),
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "outcome": outcome,
+                    "pnl_percent": round(pnl_percent, 2),
+                    "belief": belief_text,
+                    "tags": tags,
+                    "confidence_in_belief": confidence
+                }
+                
+                # Log to agent logger
+                agent_logger.info(f"BELIEF GENERATED - {symbol} ({outcome}): {belief_text[:100]}...")
+                
+                return belief_dict
+            else:
+                logger.warning(f"No JSON found in belief generation response for {symbol}")
+                return None
+                
+        except Exception as e:
+            logger.warning(f"Belief generation failed for {symbol}: {e}")
+            return None
