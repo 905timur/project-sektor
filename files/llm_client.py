@@ -213,6 +213,7 @@ Return ONLY valid JSON:
 {{
   "signal": "BUY" | "SELL" | "NEUTRAL",
   "confidence": "HIGH" | "MEDIUM" | "LOW",
+  "position_size_pct": float,  // 0.0 to 0.70 — recommended fraction of total balance to deploy
   "imbalance_type": "DAILY" | "WEEKLY" | "NONE",
   "scores": {{
     "imbalance_quality": 0-10,
@@ -233,7 +234,24 @@ Return ONLY valid JSON:
 - NEVER enter at the extreme (RSI 80 or 20) -> we want the RETRACEMENT entry
 - If no clear imbalance zone exists, return NEUTRAL
 - Daily positions stop < 3% away, Weekly stop < 7% away
-- Risk:Reward must be > 1.5 (Daily) or > 3.0 (Weekly)""",
+- Risk:Reward must be > 1.5 (Daily) or > 3.0 (Weekly)
+
+**POSITION SIZING PHILOSOPHY:**
+
+You are managing a live account. The current account balance in USDT will be provided in the user message.
+Based on the balance and your confidence level, you must recommend a `position_size_pct` (0.0 to 0.70) in your JSON output.
+
+Use the following scaling table:
+- Balance < $200    → HIGH confidence: up to 0.70 | MEDIUM confidence: up to 0.40
+- Balance $200–$500 → HIGH confidence: up to 0.50 | MEDIUM confidence: up to 0.30
+- Balance $500–$1500→ HIGH confidence: up to 0.35 | MEDIUM confidence: up to 0.20
+- Balance > $1500   → HIGH confidence: up to 0.25 | MEDIUM confidence: up to 0.15
+
+Rules:
+- Never exceed 0.70 regardless of confidence or balance.
+- Always leave at least 10% of balance as a cash buffer — account for any existing open positions.
+- If signal is NEUTRAL, set position_size_pct to 0.0.
+- Be aggressive when the account is small; the goal is growth. Be conservative as capital grows; the goal becomes preservation.""",
                 "cache_control": {"type": "ephemeral"}
             }
         ]
@@ -286,7 +304,15 @@ Return ONLY valid JSON:
             except Exception as e:
                 logger.warning(f"News fetch failed, continuing without: {e}")
         
-        user_message = f"Analyze this market data for {symbol} ({timeframe}):\\nPRIMARY TIMEFRAME:\\n{primary_csv}{context_str}{extras_str}{news_section}"
+        # Fetch account balance for position sizing
+        # Try paper trading balance first, then fall back to capital state
+        capital = self.state_manager.state.get("paper_trading", {}).get("balance", None)
+        if capital is None or capital <= 0:
+            capital = self.state_manager.state.get("capital", {}).get("current", 100.0)
+        
+        balance_line = f"CURRENT ACCOUNT BALANCE: ${capital:.2f} USDT\n\n"
+        
+        user_message = f"{balance_line}Analyze this market data for {symbol} ({timeframe}):\\nPRIMARY TIMEFRAME:\\n{primary_csv}{context_str}{extras_str}{news_section}"
         
         try:
             message = self.client.messages.create(

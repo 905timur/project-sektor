@@ -274,13 +274,23 @@ class ImbalanceStrategy:
             # Use simple fixed logic for now if capital is 0 in state
             if capital <= 0:
                  # Fetch from exchange
-                 try:
-                     capital = self.exchange.get_balance("USDT")
-                     self.state.update_capital(capital)
-                 except:
-                     capital = 100.0 # Fallback/Paper default
+                  try:
+                      capital = self.exchange.get_balance("USDT")
+                      self.state.update_capital(capital)
+                  except:
+                      capital = 100.0 # Fallback/Paper default
 
-        base_size_percent = Config.POSITION_SIZE_PERCENT
+        # Use Opus-recommended size if provided, else fall back to config default
+        opus_size = analysis.get("position_size_pct", None)
+        if opus_size is not None:
+            base_size_percent = float(opus_size)
+            logger.info(f"Using Opus-recommended position size: {base_size_percent:.0%}")
+        else:
+            base_size_percent = Config.POSITION_SIZE_PERCENT
+            logger.info(f"Opus size not provided, using config default: {base_size_percent:.0%}")
+
+        # Clamp to safe bounds regardless of source
+        base_size_percent = max(0.05, min(0.70, base_size_percent))
         
         # Phase 2: Regime-Based Sizing
         if context_extras:

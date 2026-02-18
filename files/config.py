@@ -53,6 +53,8 @@ class Config:
     # Position Sizing (Fixed amount or percentage of capital)
     # For survival mode with small capital, we might use fixed small amounts or percentage
     # Let's use percentage for scalability
+    # Fallback position size used only if Opus does not return a position_size_pct.
+    # In normal operation, Opus controls sizing dynamically based on account balance.
     POSITION_SIZE_PERCENT = 0.45  # 45% per position (leaving 10% cash buffer)
 
     # --- Protections & Limits ---
