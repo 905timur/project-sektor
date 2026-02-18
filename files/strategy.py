@@ -341,6 +341,11 @@ class ImbalanceStrategy:
             order_id = f"PAPER_{time.time()}"
             
             # Update State for compatibility
+            # Get news sentiment from analysis if available
+            news_sentiment = "NEUTRAL"
+            if analysis and "news_sentiment" in analysis:
+                news_sentiment = analysis.get("news_sentiment", "NEUTRAL")
+            
             position_data = {
                 "symbol": symbol,
                 "entry_price": current_price,
@@ -349,9 +354,25 @@ class ImbalanceStrategy:
                 "take_profit": take_profit,
                 "timestamp": time.time(),
                 "order_id": order_id,
-                "regime": context_extras.get('regime') if context_extras else "UNKNOWN"
+                "regime": context_extras.get('regime') if context_extras else "UNKNOWN",
+                # AI Position Management fields
+                "regime_at_entry": context_extras.get('regime', 'UNKNOWN') if context_extras else 'UNKNOWN',
+                "news_sentiment_at_entry": news_sentiment,
+                "milestones_hit": [],
+                "pending_ai_review": False,
+                "last_deepseek_review": 0.0,
+                "last_opus_review": 0.0,
+                "ai_stop_loss_override": None
             }
             self.state.set_position(timeframe, position_data)
+            
+            # Also update the paper trading position with regime/sentiment
+            if self.paper_trading and timeframe in self.state.state.get("paper_trading", {}).get("positions", {}):
+                paper_pos = self.state.state["paper_trading"]["positions"][timeframe]
+                if paper_pos:
+                    paper_pos["regime_at_entry"] = position_data["regime_at_entry"]
+                    paper_pos["news_sentiment_at_entry"] = news_sentiment
+                    self.state.save_state()
             
             # Notify
             regime_msg = f"Regime: {position_data['regime']}"
@@ -400,6 +421,11 @@ class ImbalanceStrategy:
 
                 order = self.exchange.place_order(symbol, side, quantity) # Market order for now for reliability of execution in 'Imbalance' context
                 
+                # Get news sentiment from analysis if available
+                news_sentiment = "NEUTRAL"
+                if analysis and "news_sentiment" in analysis:
+                    news_sentiment = analysis.get("news_sentiment", "NEUTRAL")
+                
                 # Update State
                 position_data = {
                     "symbol": symbol,
@@ -409,7 +435,15 @@ class ImbalanceStrategy:
                     "take_profit": take_profit,
                     "timestamp": time.time(),
                     "order_id": order.get('id'),
-                    "regime": context_extras.get('regime') if context_extras else "UNKNOWN"
+                    "regime": context_extras.get('regime') if context_extras else "UNKNOWN",
+                    # AI Position Management fields
+                    "regime_at_entry": context_extras.get('regime', 'UNKNOWN') if context_extras else 'UNKNOWN',
+                    "news_sentiment_at_entry": news_sentiment,
+                    "milestones_hit": [],
+                    "pending_ai_review": False,
+                    "last_deepseek_review": 0.0,
+                    "last_opus_review": 0.0,
+                    "ai_stop_loss_override": None
                 }
                 
                 self.state.set_position(timeframe, position_data)
@@ -478,6 +512,50 @@ class ImbalanceStrategy:
                 highest_pnl_percent = (pos["highest_price"] - entry_price) / entry_price * 100
                 duration_hours = (time.time() - pos["timestamp"]) / 3600
                 
+                # --- AI Event Detection ---
+                # Get current regime (reuse existing regime detection if available, else default)
+                current_regime = pos.get("regime_at_entry", "UNKNOWN")
+                try:
+                    df_dict = self.market_data.get_multi_timeframe_data(symbol, tf)
+                    if df_dict and df_dict.get('primary') is not None:
+                        current_regime = self.market_data.detect_market_regime(df_dict['primary'])
+                except Exception:
+                    pass
+                
+                # Try to get current sentiment from news client if available
+                current_sentiment = "NEUTRAL"
+                if self.news_client:
+                    try:
+                        news = self.news_client.get_cached_news(symbol)
+                        if news:
+                            s = self.news_client.analyze_sentiment(news)
+                            current_sentiment = s.get("overallSentiment", "NEUTRAL")
+                    except Exception:
+                        pass
+
+                should_review, event_type = self._detect_position_events(
+                    tf, pos, current_price, current_regime, current_sentiment
+                )
+
+                if should_review and event_type:
+                    # Mark milestone as seen (prevents re-triggering same milestone)
+                    if event_type in ("MILESTONE_1R", "MILESTONE_2R"):
+                        milestone_key = event_type.replace("MILESTONE_", "")
+                        milestones = pos.get("milestones_hit", [])
+                        if milestone_key not in milestones:
+                            milestones.append(milestone_key)
+                            self._update_position_field(tf, pos, "milestones_hit", milestones)
+                    if event_type == "STALE_WARNING":
+                        milestones = pos.get("milestones_hit", [])
+                        if "STALE" not in milestones:
+                            milestones.append("STALE")
+                            self._update_position_field(tf, pos, "milestones_hit", milestones)
+
+                    logger.info(f"🚨 Position event detected for {symbol} ({tf}): {event_type}")
+                    self._run_ai_position_review(tf, pos, current_price)
+
+                # --- End AI Event Detection ---
+                
                 # 3. Check Stop Loss
                 if current_price <= pos["stop_loss"]:
                     logger.info(f"🛑 Stop Loss hit for {symbol} ({tf})")
@@ -511,6 +589,10 @@ class ImbalanceStrategy:
                 if highest_pnl_percent > trail_trigger:
                     # Calculate potential new stop
                     trail_price = pos["highest_price"] * (1 - (trail_dist/100))
+                    # Check if AI has set a higher stop loss override
+                    ai_override = pos.get("ai_stop_loss_override")
+                    if ai_override and ai_override > trail_price:
+                        trail_price = ai_override
                     if trail_price > pos["stop_loss"]:
                         self.state.update_position(tf, {"stop_loss": trail_price})
                         logger.info(f"📈 Updated Trailing Stop for {symbol} to {trail_price}")
@@ -554,6 +636,50 @@ class ImbalanceStrategy:
             highest_pnl_percent = (pos.get("highest_price", entry_price) - entry_price) / entry_price * 100
             duration_hours = (time.time() - pos["opened_at"]) / 3600
             
+            # --- AI Event Detection ---
+            # Get current regime (reuse existing regime detection if available, else default)
+            current_regime = pos.get("regime_at_entry", "UNKNOWN")
+            try:
+                df_dict = self.market_data.get_multi_timeframe_data(symbol, tf)
+                if df_dict and df_dict.get('primary') is not None:
+                    current_regime = self.market_data.detect_market_regime(df_dict['primary'])
+            except Exception:
+                pass
+            
+            # Try to get current sentiment from news client if available
+            current_sentiment = "NEUTRAL"
+            if self.news_client:
+                try:
+                    news = self.news_client.get_cached_news(symbol)
+                    if news:
+                        s = self.news_client.analyze_sentiment(news)
+                        current_sentiment = s.get("overallSentiment", "NEUTRAL")
+                except Exception:
+                    pass
+
+            should_review, event_type = self._detect_position_events(
+                tf, pos, current_price, current_regime, current_sentiment
+            )
+
+            if should_review and event_type:
+                # Mark milestone as seen (prevents re-triggering same milestone)
+                if event_type in ("MILESTONE_1R", "MILESTONE_2R"):
+                    milestone_key = event_type.replace("MILESTONE_", "")
+                    milestones = pos.get("milestones_hit", [])
+                    if milestone_key not in milestones:
+                        milestones.append(milestone_key)
+                        self._update_position_field(tf, pos, "milestones_hit", milestones)
+                if event_type == "STALE_WARNING":
+                    milestones = pos.get("milestones_hit", [])
+                    if "STALE" not in milestones:
+                        milestones.append("STALE")
+                        self._update_position_field(tf, pos, "milestones_hit", milestones)
+
+                logger.info(f"🚨 [PAPER] Position event detected for {symbol} ({tf}): {event_type}")
+                self._run_ai_position_review(tf, pos, current_price)
+
+            # --- End AI Event Detection ---
+            
             # Log current position status
             unrealized = self.paper_trading.get_unrealized_pnl(tf, current_price)
             if unrealized:
@@ -587,6 +713,10 @@ class ImbalanceStrategy:
             
             if highest_pnl_percent > trail_trigger:
                 trail_price = pos["highest_price"] * (1 - (trail_dist/100))
+                # Check if AI has set a higher stop loss override
+                ai_override = pos.get("ai_stop_loss_override")
+                if ai_override and ai_override > trail_price:
+                    trail_price = ai_override
                 if trail_price > pos["stop_loss"]:
                     self.state.state["paper_trading"]["positions"][tf]["stop_loss"] = trail_price
                     self.state.save_state()
@@ -682,3 +812,231 @@ class ImbalanceStrategy:
         
         msg = f"Closed {timeframe} position: {pos['symbol']}\nReason: {reason}\nPnL: ${pnl:.2f} ({pnl_percent:.2f}%)"
         self.telegram.send_alert("Position Closed", msg, "SUCCESS" if pnl > 0 else "WARNING")
+
+    # =========================================================================
+    # AI POSITION MANAGEMENT
+    # =========================================================================
+    
+    def _detect_position_events(self, tf, pos, current_price, current_regime, current_sentiment):
+        """
+        Detect events that may require AI review of a position.
+        Runs entirely locally with zero API calls.
+        
+        Args:
+            tf: "daily" or "weekly"
+            pos: the full position dict from state
+            current_price: float, latest ticker price
+            current_regime: str, current market regime from market_data
+            current_sentiment: str, current news overallSentiment or "NEUTRAL"
+            
+        Returns:
+            tuple: (should_trigger: bool, event_type: str | None)
+        """
+        # 1. DANGER_ZONE - price too close to stop loss
+        distance_to_sl_pct = abs(current_price - pos["stop_loss"]) / pos["entry_price"] * 100
+        if distance_to_sl_pct <= Config.POSITION_DANGER_ZONE_PERCENT:
+            return (True, "DANGER_ZONE")
+        
+        # 2. REGIME_CHANGE - market regime shifted from entry
+        if current_regime != pos.get("regime_at_entry", current_regime):
+            return (True, "REGIME_CHANGE")
+        
+        # 3. SENTIMENT_FLIP - sentiment reversed from entry
+        entry_sentiment = pos.get("news_sentiment_at_entry", "NEUTRAL")
+        if entry_sentiment in ("BULLISH",) and current_sentiment == "BEARISH":
+            return (True, "SENTIMENT_FLIP")
+        if entry_sentiment in ("BEARISH",) and current_sentiment == "BULLISH":
+            return (True, "SENTIMENT_FLIP")
+        
+        # 4. MILESTONE - hit PnL milestones
+        pnl_pct = (current_price - pos["entry_price"]) / pos["entry_price"] * 100
+        milestones_hit = pos.get("milestones_hit", [])
+        if pnl_pct >= Config.POSITION_MILESTONE_2R and "2R" not in milestones_hit:
+            return (True, "MILESTONE_2R")
+        if pnl_pct >= Config.POSITION_MILESTONE_1R and "1R" not in milestones_hit:
+            return (True, "MILESTONE_1R")
+        
+        # 5. STALE_WARNING - position held too long with low PnL
+        time_limit_hours = 48 if tf == "daily" else 336
+        stale_trigger_hours = time_limit_hours * Config.POSITION_STALE_TIME_THRESHOLD
+        duration_hours = (time.time() - pos.get("timestamp", pos.get("opened_at", time.time()))) / 3600
+        pnl_pct = (current_price - pos["entry_price"]) / pos["entry_price"] * 100
+        if duration_hours >= stale_trigger_hours and pnl_pct < Config.POSITION_STALE_PNL_THRESHOLD:
+            if "STALE" not in milestones_hit:
+                return (True, "STALE_WARNING")
+        
+        # 6. Default: no event
+        return (False, None)
+    
+    def _update_position_field(self, tf, pos, field, value):
+        """
+        Update a single field on a position in both state and local pos dict.
+        
+        Args:
+            tf: "daily" or "weekly"
+            pos: the position dict (will be modified in-place)
+            field: field name to update
+            value: new value
+        """
+        pos[field] = value
+        if Config.PAPER_TRADING and self.paper_trading:
+            if tf in self.state.state.get("paper_trading", {}).get("positions", {}):
+                paper_pos = self.state.state["paper_trading"]["positions"][tf]
+                if paper_pos:
+                    paper_pos[field] = value
+                    self.state.save_state()
+        else:
+            self.state.update_position(tf, {field: value})
+    
+    def _run_ai_position_review(self, tf, pos, current_price):
+        """
+        Orchestrate the full AI review flow for a single position.
+        Called only when an event has been detected.
+        
+        Args:
+            tf: "daily" or "weekly"
+            pos: the full position dict from state
+            current_price: current market price
+        """
+        # 1. CHECK DEEPSEEK COOLDOWN
+        secs_since_deepseek = time.time() - pos.get("last_deepseek_review", 0)
+        if secs_since_deepseek < Config.POSITION_DEEPSEEK_COOLDOWN_SECS:
+            logger.info(f"⏳ DeepSeek cooldown active for {pos['symbol']} — skipping AI review")
+            return
+        
+        # 2. GET CURRENT CONTEXT (free, no API)
+        # Fetch current regime from market data
+        try:
+            df_dict = self.market_data.get_multi_timeframe_data(pos["symbol"], tf)
+            if df_dict and df_dict.get('primary') is not None:
+                current_regime = self.market_data.detect_market_regime(df_dict['primary'])
+            else:
+                current_regime = pos.get("regime_at_entry", "UNKNOWN")
+        except Exception:
+            current_regime = pos.get("regime_at_entry", "UNKNOWN")
+        
+        # Get current sentiment from news client if available
+        current_sentiment = "NEUTRAL"
+        if self.news_client:
+            try:
+                news = self.news_client.get_cached_news(pos["symbol"])
+                if news:
+                    sentiment_result = self.news_client.analyze_sentiment(news)
+                    current_sentiment = sentiment_result.get("overallSentiment", "NEUTRAL")
+            except Exception:
+                pass
+        
+        # Detect which event fired
+        _, event_type = self._detect_position_events(tf, pos, current_price, current_regime, current_sentiment)
+        if event_type is None:
+            return  # Shouldn't happen but guard
+        
+        # 3. CALL DEEPSEEK
+        result = self.llm.review_position_deepseek(
+            pos, tf, current_price, current_regime, current_sentiment, event_type
+        )
+        
+        # Update last_deepseek_review timestamp
+        self._update_position_field(tf, pos, "last_deepseek_review", time.time())
+        
+        # Log result via Telegram
+        self.telegram.send_alert(
+            "🤖 DeepSeek Review",
+            f"{pos['symbol']}: {result['action']} ({result['urgency']}) — {result['reasoning']}",
+            "INFO"
+        )
+        
+        # 4. ACT ON DEEPSEEK RESULT
+        action = result["action"]
+        
+        if action == "TIGHTEN_STOP":
+            new_sl = result.get("suggested_stop_loss")
+            if new_sl and new_sl > pos["stop_loss"]:  # Only tighten, never widen
+                self._update_position_field(tf, pos, "stop_loss", new_sl)
+                self._update_position_field(tf, pos, "pending_ai_review", False)
+                self.telegram.send_alert(
+                    "🤖 AI Stop Tightened",
+                    f"{pos['symbol']}: SL moved to {new_sl:.2f} ({result['reasoning']})",
+                    "INFO"
+                )
+            return
+        
+        if action == "EXIT_NOW":
+            self.telegram.send_alert(
+                "🤖 AI Exit Signal",
+                f"{pos['symbol']}: {result['reasoning']}",
+                "TRADE"
+            )
+            if Config.PAPER_TRADING:
+                self._close_paper_position(tf, current_price, f"AI Exit ({event_type})")
+            else:
+                self.exchange.place_order(pos["symbol"], "sell", pos["size"])
+                self.close_position(tf, current_price, f"AI Exit ({event_type})")
+            return
+        
+        if action == "ESCALATE":
+            # Check Opus cooldown before escalating
+            secs_since_opus = time.time() - pos.get("last_opus_review", 0)
+            if secs_since_opus < Config.POSITION_OPUS_COOLDOWN_SECS:
+                logger.info(f"⏳ Opus cooldown active for {pos['symbol']} — escalation skipped")
+                self._update_position_field(tf, pos, "pending_ai_review", False)
+                return
+            
+            # Fetch recent candles for Opus
+            tf_code = Config.TIMEFRAMES.get(tf, "1d")
+            try:
+                recent_df = self.market_data.get_market_data(pos["symbol"], tf_code)
+                if recent_df is None:
+                    logger.warning(f"Could not fetch market data for Opus review of {pos['symbol']}")
+                    return
+            except Exception as e:
+                logger.error(f"Error fetching market data for Opus review: {e}")
+                return
+            
+            opus_result = self.llm.review_position_opus(
+                pos, tf, current_price, current_regime, current_sentiment, event_type, recent_df
+            )
+            self._update_position_field(tf, pos, "last_opus_review", time.time())
+            self.telegram.send_alert(
+                "🧠 Opus Position Review",
+                f"{pos['symbol']}: {opus_result['action']} — {opus_result['reasoning']}",
+                "INFO"
+            )
+            
+            # Act on Opus result
+            if opus_result["action"] == "EXIT_NOW":
+                self.telegram.send_alert(
+                    "🧠 Opus Exit Signal",
+                    f"{pos['symbol']}: {opus_result['reasoning']}",
+                    "TRADE"
+                )
+                if Config.PAPER_TRADING:
+                    self._close_paper_position(tf, current_price, f"Opus Exit ({event_type})")
+                else:
+                    self.exchange.place_order(pos["symbol"], "sell", pos["size"])
+                    self.close_position(tf, current_price, f"Opus Exit ({event_type})")
+                return
+            
+            elif opus_result["action"] == "ADJUST_STOP":
+                new_sl = opus_result.get("new_stop_loss")
+                if new_sl and new_sl > pos["stop_loss"]:
+                    self._update_position_field(tf, pos, "stop_loss", new_sl)
+                    self._update_position_field(tf, pos, "ai_stop_loss_override", new_sl)
+                    self.telegram.send_alert(
+                        "🧠 Opus Stop Adjusted",
+                        f"{pos['symbol']}: SL moved to {new_sl:.2f} ({opus_result['reasoning']})",
+                        "INFO"
+                    )
+            
+            elif opus_result["action"] == "EXIT_PARTIAL":
+                # Close 50% of size — paper trading only for now
+                if Config.PAPER_TRADING:
+                    logger.info(f"🤖 Partial exit recommended for {pos['symbol']} — manual action required (partial exits not yet automated)")
+                    self.telegram.send_alert(
+                        "🤖 Partial Exit Recommended",
+                        f"{pos['symbol']}: Consider closing 50% manually. Reason: {opus_result['reasoning']}",
+                        "INFO"
+                    )
+        
+        # For HOLD or after any action, clear pending flag
+        self._update_position_field(tf, pos, "pending_ai_review", False)

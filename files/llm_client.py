@@ -554,3 +554,313 @@ Rules:
                 "proceed_to_full_analysis": True,  # Fallback to Opus
                 "screening_id": screening_id
             }
+
+    # =========================================================================
+    # AI POSITION MANAGEMENT - DEEPSEEK & OPUS REVIEW
+    # =========================================================================
+    
+    def review_position_deepseek(self, pos, timeframe, current_price, current_regime, current_sentiment, event_type):
+        """
+        Use DeepSeek (free via OpenRouter) for quick position review.
+        Called when an event is detected that may require action.
+        
+        Args:
+            pos: Position dict from state
+            timeframe: "daily" or "weekly"
+            current_price: Current market price
+            current_regime: Current market regime
+            current_sentiment: Current news sentiment
+            event_type: The event that triggered this review
+            
+        Returns:
+            dict with action, reasoning, urgency, suggested_stop_loss, raw_response
+        """
+        # Check if OpenRouter API key is configured
+        if not Config.OPENROUTER_API_KEY:
+            logger.warning("OPENROUTER_API_KEY not set - skipping DeepSeek position review")
+            return {
+                "action": "HOLD",
+                "reasoning": "OpenRouter API key not configured",
+                "urgency": "LOW",
+                "suggested_stop_loss": None
+            }
+        
+        # Build compact position snapshot
+        snapshot = {
+            "symbol": pos["symbol"],
+            "timeframe": timeframe,
+            "side": "long",
+            "trigger_event": event_type,
+            "entry_price": pos["entry_price"],
+            "current_price": current_price,
+            "stop_loss": pos["stop_loss"],
+            "take_profit": pos["take_profit"],
+            "highest_price": pos.get("highest_price", pos["entry_price"]),
+            "pnl_percent": round((current_price - pos["entry_price"]) / pos["entry_price"] * 100, 2),
+            "duration_hours": round((time.time() - pos.get("timestamp", pos.get("opened_at", time.time()))) / 3600, 1),
+            "regime_at_entry": pos.get("regime_at_entry", "UNKNOWN"),
+            "regime_now": current_regime,
+            "sentiment_at_entry": pos.get("news_sentiment_at_entry", "NEUTRAL"),
+            "sentiment_now": current_sentiment
+        }
+        
+        # System prompt for position review
+        system_prompt = """You are a position management assistant for a crypto trading bot.
+You will receive a snapshot of an open trade and the event that triggered this review.
+Your job: decide if action is needed based on whether the original trade thesis is still intact.
+Return ONLY valid JSON — no preamble, no markdown.
+
+Output format:
+{
+  "action": "HOLD" | "TIGHTEN_STOP" | "EXIT_NOW" | "ESCALATE",
+  "reasoning": "1-2 sentences",
+  "urgency": "LOW" | "MEDIUM" | "HIGH",
+  "suggested_stop_loss": float | null
+}
+
+Rules:
+- HOLD: thesis intact, no action needed
+- TIGHTEN_STOP: thesis weakening, reduce risk by moving SL closer, provide suggested_stop_loss
+- EXIT_NOW: thesis broken, close the position immediately
+- ESCALATE: situation is ambiguous or complex, needs Opus review
+- Only ESCALATE when genuinely uncertain — not as a default
+- suggested_stop_loss must be null unless action == TIGHTEN_STOP"""
+        
+        user_message = f"Position snapshot:\n{json.dumps(snapshot, indent=2)}"
+        
+        # Prepare request
+        request_data = {
+            "model": Config.DEEPSEEK_MODEL,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message}
+            ]
+        }
+        
+        request_body = json.dumps(request_data).encode('utf-8')
+        
+        # Build request with required headers
+        req = urllib.request.Request(
+            f"{Config.OPENROUTER_BASE_URL}/chat/completions",
+            data=request_body,
+            headers={
+                "Authorization": f"Bearer {Config.OPENROUTER_API_KEY}",
+                "HTTP-Referer": "imbalance-trading-bot",
+                "X-Title": "Imbalance Bot",
+                "Content-Type": "application/json"
+            },
+            method='POST'
+        )
+        
+        try:
+            # Set timeout and make request
+            with socket.timeout(Config.DEEPSEEK_TIMEOUT):
+                with urllib.request.urlopen(req) as response:
+                    response_data = json.loads(response.read().decode('utf-8'))
+            
+            # Extract response content
+            content = response_data.get('choices', [{}])[0].get('message', {}).get('content', '')
+            
+            # Extract token usage (for logging only, no cost tracking - free tier)
+            usage = response_data.get('usage', {})
+            prompt_tokens = usage.get('prompt_tokens', 0)
+            completion_tokens = usage.get('completion_tokens', 0)
+            logger.info(f"DeepSeek position review tokens: {prompt_tokens} prompt + {completion_tokens} completion = {prompt_tokens + completion_tokens} total")
+            
+            # DeepSeek R1 uses <think\> blocks - strip them before JSON parsing
+            think_end = content.find(r'</think\>')
+            if think_end != -1:
+                content = content[think_end + 8:].strip()
+            
+            # Parse JSON response
+            start = content.find('{')
+            end = content.rfind('}') + 1
+            
+            if start != -1 and end != -1:
+                json_str = content[start:end]
+                result = json.loads(json_str)
+                
+                action = result.get('action', 'HOLD')
+                reasoning = result.get('reasoning', 'No reasoning provided')
+                urgency = result.get('urgency', 'LOW')
+                suggested_sl = result.get('suggested_stop_loss')
+                
+                # Log agent reasoning
+                agent_logger.info(f"DEEPSEEK POSITION REVIEW - {pos['symbol']} ({event_type}): {action} / {urgency} - {reasoning}")
+                
+                return {
+                    "action": action,
+                    "reasoning": reasoning,
+                    "urgency": urgency,
+                    "suggested_stop_loss": suggested_sl,
+                    "raw_response": content
+                }
+            else:
+                logger.warning(f"No JSON found in DeepSeek position review response")
+                agent_logger.info(f"DEEPSEEK POSITION REVIEW - {pos['symbol']} ({event_type}): HOLD / LOW - Failed to parse response")
+                return {
+                    "action": "HOLD",
+                    "reasoning": "Failed to parse DeepSeek response",
+                    "urgency": "LOW",
+                    "suggested_stop_loss": None
+                }
+                
+        except socket.timeout:
+            logger.warning(f"⚠️ DeepSeek position review timed out after {Config.DEEPSEEK_TIMEOUT}s")
+            agent_logger.info(f"DEEPSEEK POSITION REVIEW - {pos['symbol']} ({event_type}): HOLD / LOW - Timeout")
+            return {
+                "action": "HOLD",
+                "reasoning": "DeepSeek timed out — holding",
+                "urgency": "LOW",
+                "suggested_stop_loss": None
+            }
+        except Exception as e:
+            logger.warning(f"⚠️ DeepSeek position review failed: {e}")
+            agent_logger.info(f"DEEPSEEK POSITION REVIEW - {pos['symbol']} ({event_type}): HOLD / LOW - Error: {str(e)}")
+            return {
+                "action": "HOLD",
+                "reasoning": f"DeepSeek error: {str(e)} — holding",
+                "urgency": "LOW",
+                "suggested_stop_loss": None
+            }
+    
+    def review_position_opus(self, pos, timeframe, current_price, current_regime, current_sentiment, event_type, recent_candles_df):
+        """
+        Use Opus for detailed position review when DeepSeek escalates.
+        
+        Args:
+            pos: Position dict from state
+            timeframe: "daily" or "weekly"
+            current_price: Current market price
+            current_regime: Current market regime
+            current_sentiment: Current news sentiment
+            event_type: The event that triggered this review
+            recent_candles_df: DataFrame with recent candles for context
+            
+        Returns:
+            dict with action, reasoning, new_stop_loss, confidence, thesis_intact
+        """
+        # Build compact position snapshot
+        snapshot = {
+            "symbol": pos["symbol"],
+            "timeframe": timeframe,
+            "side": "long",
+            "trigger_event": event_type,
+            "entry_price": pos["entry_price"],
+            "current_price": current_price,
+            "stop_loss": pos["stop_loss"],
+            "take_profit": pos["take_profit"],
+            "highest_price": pos.get("highest_price", pos["entry_price"]),
+            "pnl_percent": round((current_price - pos["entry_price"]) / pos["entry_price"] * 100, 2),
+            "duration_hours": round((time.time() - pos.get("timestamp", pos.get("opened_at", time.time()))) / 3600, 1),
+            "regime_at_entry": pos.get("regime_at_entry", "UNKNOWN"),
+            "regime_now": current_regime,
+            "sentiment_at_entry": pos.get("news_sentiment_at_entry", "NEUTRAL"),
+            "sentiment_now": current_sentiment
+        }
+        
+        # Format recent candles (last 5 only)
+        candles_csv = self._format_market_data_csv(recent_candles_df.tail(5))
+        
+        # System prompt for Opus position review (cached)
+        system_prompt = [
+            {
+                "type": "text",
+                "text": """You are an expert imbalance trader reviewing an open position.
+
+Your original entry was based on an imbalance setup (FVG or Order Block). 
+Your job is to assess whether that thesis remains valid given current conditions.
+
+You will receive:
+1. A position snapshot with entry details and current P&L
+2. The last 5 candles of price action on the entry timeframe (CSV: open,high,low,close,volume)
+3. The event that triggered this review
+
+Assess:
+- Is price respecting the original imbalance zone or has it broken structure?
+- Has the market regime or momentum shifted against the trade?
+- Is the current stop loss placement still logical, or should it be adjusted?
+- Does the risk/reward still justify holding?
+
+Return ONLY valid JSON:
+{
+  "action": "HOLD" | "EXIT_NOW" | "EXIT_PARTIAL" | "ADJUST_STOP",
+  "reasoning": "2-3 sentence explanation of thesis status",
+  "new_stop_loss": float | null,
+  "confidence": "HIGH" | "MEDIUM" | "LOW",
+  "thesis_intact": true | false
+}
+
+Rules:
+- EXIT_PARTIAL means close 50% of position size (only recommend if partial exits are meaningful)
+- Only adjust stop if you have a specific structural level to reference
+- Be decisive — HOLD means you genuinely believe the setup is still valid
+- new_stop_loss must be null unless action is ADJUST_STOP""",
+                "cache_control": {"type": "ephemeral"}
+            }
+        ]
+        
+        user_message = f"Position snapshot:\n{json.dumps(snapshot, indent=2)}\n\nLast 5 candles (open,high,low,close,volume):\n{candles_csv}"
+        
+        try:
+            # Call Opus with cached system prompt
+            response = self.client.messages.create(
+                model=Config.ANALYSIS_MODEL,
+                max_tokens=400,
+                system=system_prompt,
+                messages=[
+                    {"role": "user", "content": user_message}
+                ]
+            )
+            
+            # Track cost
+            self._track_cost(Config.ANALYSIS_MODEL, response.usage)
+            
+            # Parse response
+            content = response.content[0].text
+            
+            # Parse JSON
+            start = content.find('{')
+            end = content.rfind('}') + 1
+            
+            if start != -1 and end != -1:
+                json_str = content[start:end]
+                result = json.loads(json_str)
+                
+                action = result.get('action', 'HOLD')
+                reasoning = result.get('reasoning', 'No reasoning provided')
+                new_sl = result.get('new_stop_loss')
+                confidence = result.get('confidence', 'LOW')
+                thesis_intact = result.get('thesis_intact', True)
+                
+                # Log agent reasoning
+                agent_logger.info(f"OPUS POSITION REVIEW - {pos['symbol']} ({event_type}): {action} / thesis_intact={thesis_intact} - {reasoning}")
+                
+                return {
+                    "action": action,
+                    "reasoning": reasoning,
+                    "new_stop_loss": new_sl,
+                    "confidence": confidence,
+                    "thesis_intact": thesis_intact
+                }
+            else:
+                logger.warning(f"No JSON found in Opus position review response")
+                agent_logger.info(f"OPUS POSITION REVIEW - {pos['symbol']} ({event_type}): HOLD - Failed to parse response")
+                return {
+                    "action": "HOLD",
+                    "reasoning": "Failed to parse Opus response",
+                    "new_stop_loss": None,
+                    "confidence": "LOW",
+                    "thesis_intact": True
+                }
+                
+        except Exception as e:
+            logger.error(f"Opus position review failed: {e}")
+            agent_logger.info(f"OPUS POSITION REVIEW - {pos['symbol']} ({event_type}): HOLD - Error: {str(e)}")
+            return {
+                "action": "HOLD",
+                "reasoning": "Opus review failed — holding",
+                "new_stop_loss": None,
+                "confidence": "LOW",
+                "thesis_intact": True
+            }

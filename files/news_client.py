@@ -365,6 +365,33 @@ class RSSNewsClient:
         """Alias for trader-bot compatibility."""
         return self.get_all_news(limit)
     
+    def get_cached_news(self, symbol: str = None) -> Optional[Dict[str, Any]]:
+        """
+        Return cached news without making a new HTTP fetch.
+        This is called from the hot path of manage_positions and must never block.
+        
+        Args:
+            symbol: Trading symbol (e.g., 'BTC/USDT') - used to determine if Bitcoin-specific news
+            
+        Returns:
+            Cached news dict or None if no cache entry exists or it is expired
+        """
+        now = time.time() * 1000  # Current time in ms
+        
+        # Determine which cache key to check based on symbol
+        if symbol and 'BTC' in symbol.upper():
+            # Check for Bitcoin-specific cache first
+            cache_key = "all_50"  # get_bitcoin_news uses get_all_news(50)
+        else:
+            cache_key = "all_10"
+        
+        if cache_key in self._cache:
+            cached = self._cache[cache_key]
+            if now - cached['timestamp'] < self._cache_expiry_ms:
+                return cached['data']
+        
+        return None
+    
     def get_bitcoin_news(self, limit: int = 10) -> Dict[str, Any]:
         """
         Get Bitcoin-specific news.

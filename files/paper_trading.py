@@ -117,7 +117,15 @@ class PaperTradingManager:
                 "take_profit": take_profit,
                 "highest_price": execution_price,
                 "opened_at": time.time(),
-                "timeframe": timeframe
+                "timeframe": timeframe,
+                # AI Position Management fields
+                "regime_at_entry": "UNKNOWN",  # Will be set by strategy.py
+                "news_sentiment_at_entry": "NEUTRAL",  # Will be set by strategy.py
+                "milestones_hit": [],  # List of strings e.g. ["1R", "2R"]
+                "pending_ai_review": False,
+                "last_deepseek_review": 0.0,  # Unix timestamp, 0 = never
+                "last_opus_review": 0.0,  # Unix timestamp, 0 = never
+                "ai_stop_loss_override": None  # Opus can suggest a new SL
             }
             
             paper["positions"][timeframe] = position

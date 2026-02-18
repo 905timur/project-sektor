@@ -67,6 +67,24 @@ class Config:
     # API Costs
     COST_LIMIT_DAILY_USD = 1.00 # Max daily spend on API
 
+    # --- AI Position Management ---
+    # Minimum seconds between DeepSeek position reviews per position
+    POSITION_DEEPSEEK_COOLDOWN_SECS = 1800   # 30 minutes
+
+    # Minimum seconds between Opus position reviews per position
+    POSITION_OPUS_COOLDOWN_SECS = 21600      # 6 hours
+
+    # How close to SL (as % distance) before triggering a danger-zone event
+    POSITION_DANGER_ZONE_PERCENT = 0.5       # within 0.5% of stop loss
+
+    # PnL milestone thresholds that trigger AI review (percent)
+    POSITION_MILESTONE_1R = 1.0              # First R milestone
+    POSITION_MILESTONE_2R = 2.0              # Second R milestone
+
+    # Stale warning: trigger AI if this % of time-exit threshold elapsed with low PnL
+    POSITION_STALE_TIME_THRESHOLD = 0.5      # 50% of time limit elapsed
+    POSITION_STALE_PNL_THRESHOLD = 0.5       # with less than 0.5% gain
+
     # Paper Trading
     PAPER_TRADING = True # Default to True for safety
     PAPER_TRADING_INITIAL_BALANCE = 50.0  # Starting paper trading balance in USD
