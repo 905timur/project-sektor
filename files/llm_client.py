@@ -16,16 +16,29 @@ if TYPE_CHECKING:
     from news_client import RSSNewsClient
 
 logger = logging.getLogger(__name__)
+agent_logger = logging.getLogger('agent')
 
 class LLMClient:
     def __init__(self, state_manager, news_client: Optional['RSSNewsClient'] = None):
         self.client = anthropic.Anthropic(api_key=Config.ANTHROPIC_API_KEY)
         self.state_manager = state_manager
         self.news_client = news_client
-        
+
         # Cached system prompts (built once, reused with caching)
         self._analysis_system_prompt = None
         self._approval_system_prompt = None
+
+        # Setup agent logger
+        self._setup_agent_logger()
+
+    def _setup_agent_logger(self):
+        """Setup separate logger for agent reasoning."""
+        agent_logger.setLevel(logging.INFO)
+        agent_handler = logging.FileHandler(Config.AGENT_LOG_FILE)
+        agent_formatter = logging.Formatter('%(asctime)s - %(message)s')
+        agent_handler.setFormatter(agent_formatter)
+        agent_logger.addHandler(agent_handler)
+        agent_logger.propagate = False  # Don't propagate to root logger
 
     def _track_cost(self, model, usage):
         """
@@ -291,7 +304,13 @@ Return ONLY valid JSON:
                 end = response_text.rfind('}') + 1
                 if start != -1 and end != -1:
                     json_str = response_text[start:end]
-                    return json.loads(json_str)
+                    result = json.loads(json_str)
+                    # Log agent reasoning for Opus analysis
+                    signal = result.get('signal', 'NEUTRAL')
+                    confidence = result.get('confidence', 'LOW')
+                    reasoning = result.get('reasoning', 'No reasoning provided')
+                    agent_logger.info(f"OPUS ANALYSIS - {symbol} ({timeframe}): {signal}/{confidence} - {reasoning}")
+                    return result
                 else:
                     logger.warning("No JSON found in LLM response")
                     return None
@@ -445,6 +464,8 @@ Rules:
                 # proceed_to_full_analysis = true ONLY when signal is BUY or SELL AND confidence is HIGH or MEDIUM
                 proceed = signal in ['BUY', 'SELL'] and confidence in ['HIGH', 'MEDIUM']
                 
+                # Log agent reasoning for successful DeepSeek screening
+                agent_logger.info(f"DEEPSEEK SCREENING - {symbol} ({timeframe}): {signal}/{confidence} - {reasoning}")
                 return {
                     "signal": signal,
                     "confidence": confidence,
@@ -457,6 +478,8 @@ Rules:
                 }
             else:
                 logger.warning(f"No JSON found in DeepSeek response")
+                # Log agent reasoning for failed DeepSeek screening
+                agent_logger.info(f"DEEPSEEK SCREENING - {symbol} ({timeframe}): NEUTRAL/LOW - Failed to parse DeepSeek response")
                 return {
                     "signal": "NEUTRAL",
                     "confidence": "LOW",
@@ -467,6 +490,8 @@ Rules:
                 
         except socket.timeout:
             logger.warning(f"⚠️ DeepSeek screening timed out after {Config.DEEPSEEK_TIMEOUT}s - falling back to Opus")
+            # Log agent reasoning for timeout
+            agent_logger.info(f"DEEPSEEK SCREENING - {symbol} ({timeframe}): NEUTRAL/LOW - Timeout after {Config.DEEPSEEK_TIMEOUT}s")
             return {
                 "signal": "NEUTRAL",
                 "confidence": "LOW",
@@ -485,6 +510,8 @@ Rules:
             }
         except json.JSONDecodeError as e:
             logger.warning(f"⚠️ DeepSeek response JSON parse error: {e} - falling back to Opus")
+            # Log agent reasoning for JSON parse error
+            agent_logger.info(f"DEEPSEEK SCREENING - {symbol} ({timeframe}): NEUTRAL/LOW - JSON parse error: {str(e)}")
             return {
                 "signal": "NEUTRAL",
                 "confidence": "LOW",

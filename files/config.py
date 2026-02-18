@@ -79,6 +79,7 @@ class Config:
     STATE_FILE = os.path.join(DATA_DIR, "bot_state.json")
     DB_FILE = os.path.join(DATA_DIR, "trades.db")
     LOG_FILE = os.path.join(DATA_DIR, "bot.log")
+    AGENT_LOG_FILE = os.path.join(DATA_DIR, "agent.log")
 
     # Ensure data directory exists
     os.makedirs(DATA_DIR, exist_ok=True)
