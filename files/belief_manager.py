@@ -94,61 +94,66 @@ class BeliefManager:
                             regime: str = None, setup_type: str = None, 
                             n: int = None) -> list:
         """
-        Return the most relevant beliefs based on priority scoring.
-        
-        Priority scoring:
-        - +3 if same symbol
-        - +2 if same timeframe
-        - +1 if same regime tag
-        - +1 if same setup_type tag
-        Tiebreak by recency (most recent first).
-        
-        Args:
-            symbol: Trading symbol (e.g., 'BTC/USDT')
-            timeframe: Timeframe (e.g., 'daily', 'weekly')
-            regime: Current market regime (optional)
-            setup_type: Setup type like 'FVG', 'OB' (optional)
-            n: Number of beliefs to return (default: Config.BELIEFS_INJECTED_PER_ANALYSIS)
-        
-        Returns:
-            List of belief dicts sorted by relevance score (highest first)
+        Return the most relevant beliefs, ranked by how closely they match
+        the current trading conditions.
+
+        PRIMARY PATH (SurrealDB):
+          Uses graph traversal to rank beliefs by the regime of the source
+          trade they were learned from. This is semantically richer than
+          tag matching — a belief earns its relevance from what actually
+          happened, not from how it was labelled.
+
+        FALLBACK PATH (JSON file):
+          If SurrealDB is unavailable or returns 0 results, falls back to
+          the original in-memory priority scoring over beliefs.json.
+
+        The returned list shape is identical on both paths.
         """
         if n is None:
             n = Config.BELIEFS_INJECTED_PER_ANALYSIS
         
+        # --- PRIMARY: SurrealDB graph query ---
+        try:
+            results = self.surreal.query_relevant_beliefs(
+                symbol=symbol,
+                timeframe=timeframe,
+                regime=regime,
+                setup_type=setup_type,
+                n=n
+            )
+            if results:
+                logger.info(
+                    f"[SurrealDB] Loaded {len(results)} beliefs for "
+                    f"{symbol}/{timeframe} regime={regime} "
+                    f"({sum(1 for b in results if b.get('_regime_match'))} regime-matched)"
+                )
+                return results
+            # Fall through if SurrealDB returned empty (could be cold start
+            # before any writes have synced)
+            logger.info("[SurrealDB] belief query returned 0 results — using JSON fallback")
+        except Exception as e:
+            logger.warning(f"[SurrealDB] belief query failed ({e}) — using JSON fallback")
+
+        # --- FALLBACK: original JSON scoring (unchanged logic) ---
         beliefs = self.load_beliefs()
-        
         if not beliefs:
             return []
         
-        # Score each belief
         scored_beliefs = []
         for belief in beliefs:
             score = 0
-            
-            # +3 for same symbol
             if belief.get("symbol", "").upper() == symbol.upper():
                 score += 3
-            
-            # +2 for same timeframe
             if belief.get("timeframe", "").lower() == timeframe.lower():
                 score += 2
-            
-            # +1 for same regime tag
             belief_tags = belief.get("tags", [])
             if regime and regime.upper() in [tag.upper() for tag in belief_tags]:
                 score += 1
-            
-            # +1 for same setup_type tag
             if setup_type and setup_type.upper() in [tag.upper() for tag in belief_tags]:
                 score += 1
-            
             scored_beliefs.append((score, belief.get("timestamp", 0), belief))
         
-        # Sort by score (desc), then by timestamp (desc) for tiebreak
         scored_beliefs.sort(key=lambda x: (x[0], x[1]), reverse=True)
-        
-        # Return top n
         return [belief for _, _, belief in scored_beliefs[:n]]
     
     def get_recent_beliefs(self, n: int = None) -> list:

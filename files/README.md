@@ -169,6 +169,12 @@ The bot runs a continuous pipeline every 5 minutes. Here's the complete flow:
   - API cost tracking (daily/total)
   - Paper trading state
 
+- **JSON beliefs file** - Self-reflection beliefs for AI context:
+  - Lessons learned from closed trades
+  - Written by Opus after each trade
+  - Used in subsequent analysis prompts
+  - Mirrored in SurrealDB with graph edges to source trades
+
 ---
 
 ## Key Features
@@ -359,6 +365,116 @@ SURREALDB_URL=surrealkv://data/surreal.db   # embedded (default)
 # SURREALDB_URL=ws://localhost:8000         # standalone server
 ```
 
+---
+
+## SurrealDB Data Layer
+
+The bot uses SurrealDB as a secondary data store that mirrors SQLite and JSON
+writes, thengradually replaces them as the primary read source for AI context
+retrieval.
+
+### Architecture: Dual-Write with Progressive Read Migration
+
+| Phase                    | Writes                           | Reads                                         |
+| ------------------------ | -------------------------------- | --------------------------------------------- |
+| **Phase 1** (Dual-Write) | SQLite/JSON + SurrealDB (shadow) | SQLite/JSON only                              |
+| **Phase 2** (Read Layer) | SQLite/JSON + SurrealDB (shadow) | **SurrealDB-first** → fallback to SQLite/JSON |
+
+### Phase 1: Dual-Write Shadow Layer
+
+When enabled, every write operation is duplicated to SurrealDB:
+
+| Record Type | SurrealDB Record | Graph Edge                                    |
+| ----------- | ---------------- | --------------------------------------------- |
+| Trade       | `trade:{id}`     | —                                             |
+| Belief      | `belief:{id}`    | `belief:{id}->learned_from->trade:{trade_id}` |
+| Screening   | `screening:{id}` | —                                             |
+| Bot State   | `state:bot`      | —                                             |
+
+The graph edge (`belief->learned_from->trade`) captures which trade a belief was
+learned from, enabling regime-based belief retrieval in Phase 2.
+
+### Phase 2: Read Layer for AI Context
+
+Phase 2 upgrades two hot paths that feed context into Opus:
+
+#### 1. Belief Retrieval (for trade analysis prompts)
+
+- **Before**: In-memory Python scoring over `beliefs.json` based on tag matching
+- **After**: SurrealDB graph query that filters by the regime of the _source
+  trade_
+
+```python
+# Graph traversal ranks beliefs by source trade regime
+SELECT * FROM belief
+WHERE symbol = $symbol
+  AND timeframe = $timeframe
+ORDER BY regime_match DESC, timestamp DESC
+```
+
+This is semantically richer — a belief earns relevance from what actually
+happened, not from how it was labeled.
+
+#### 2. Trade Context for Analysis (analyze_trades.py)
+
+- **Before**: Blindly fetch 50 most recent closed trades
+- **After**: Condition-matched retrieval (same symbol + regime + timeframe)
+
+```bash
+# CLI usage
+python analyze_trades.py --symbol BTC/USDT --regime TRENDING_UP --timeframe daily
+```
+
+The query progressively loosens filters if too few results: exact match →
+regime+timeframe only → regime only → recency fallback.
+
+### Fallback Behavior
+
+All SurrealDB operations have automatic fallbacks:
+
+| Operation                  | Fallback                             |
+| -------------------------- | ------------------------------------ |
+| Belief query fails         | JSON scoring over `beliefs.json`     |
+| Belief query returns empty | JSON scoring over `beliefs.json`     |
+| Trade query fails          | SQLite `get_trades_by_conditions()`  |
+| Trade query returns empty  | SQLite `get_recent_trades(limit=50)` |
+
+Fallbacks are transparent — callers receive identical data shapes regardless of
+which source was used. Logs always indicate the source at INFO level:
+
+```
+[SurrealDB] Loaded 5 beliefs for BTC/USDT/daily regime=TRENDING_UP (3 regime-matched)
+[SurrealDB] condition query returned 0 trades — using SQLite fallback
+[SQLite] Falling back to plain recent trades (no conditions)
+```
+
+### Configuration
+
+| Variable            | Default                       | Description                   |
+| ------------------- | ----------------------------- | ----------------------------- |
+| `SURREALDB_URL`     | `surrealkv://data/surreal.db` | Embedded KV store (no server) |
+|                     | `ws://localhost:8000`         | Standalone SurrealDB server   |
+| `READ_TIMEOUT_SECS` | `3`                           | Max wait for SurrealDB reads  |
+
+### Data Files
+
+```
+imbalance-bot/
+...
+├── surreal_client.py    # SurrealDB client (read + write)
+...
+└── data/
+    ├── bot_state.json   # Persistent state (JSON)
+    ├── trades.db       # SQLite trade database
+    ├── beliefs.json    # Self-reflection beliefs (JSON)
+    └── surreal.db     # SurrealDB embedded store
+```
+
+### Enabling/Disabling
+
+SurrealDB is optional. If the package is not installed or `SURREALDB_URL` is
+empty, the bot gracefully degrades to SQLite/JSON-only operation.
+
 ### 3. Run
 
 ```bash
@@ -389,13 +505,17 @@ imbalance-bot/
 ├── state_manager.py     # JSON-based state persistence
 ├── opportunity_tracker.py # Watchlist management for imbalances
 ├── database.py          # SQLite trade logging
+├── surreal_client.py   # SurrealDB client (dual-write + read layer)
 ├── paper_trading.py     # Paper trading simulation manager
 ├── telegram_bot.py      # Telegram notification handler
-├── analyze_trades.py    # Trade history analysis tool
+├── analyze_trades.py   # Trade history analysis tool (with condition-matched retrieval)
+├── belief_manager.py    # Self-reflection belief management
 ├── requirements.txt     # Python dependencies
 └── data/
     ├── bot_state.json   # Persistent state file
-    └── trades.db        # SQLite trade database
+    ├── trades.db       # SQLite trade database
+    ├── beliefs.json    # Self-reflection beliefs (JSON)
+    └── surreal.db     # SurrealDB embedded store
 ```
 
 ---

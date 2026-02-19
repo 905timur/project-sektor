@@ -221,6 +221,78 @@ class TradeDatabase:
             logger.error(f"Failed to fetch recent trades: {e}")
             return []
     
+    def get_trades_by_conditions(
+        self,
+        symbol: str = None,
+        regime: str = None,
+        timeframe: str = None,
+        limit: int = 30
+    ) -> list:
+        """
+        Fallback SQLite version of condition-matched trade retrieval.
+        Called when SurrealDB is unavailable.
+
+        Applies the same progressive loosening strategy as the SurrealDB
+        path: exact match first, then drop symbol, then return recent.
+        All filters are optional.
+        """
+        try:
+            conn = self._get_connection()
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            conditions = ["status = 'CLOSED'"]
+            params = []
+
+            if symbol:
+                conditions.append("symbol = ?")
+                params.append(symbol)
+            if regime:
+                conditions.append("regime = ?")
+                params.append(regime)
+            if timeframe:
+                conditions.append("timeframe = ?")
+                params.append(timeframe)
+
+            params.append(limit)
+            where = " AND ".join(conditions)
+            cursor.execute(
+                f"SELECT * FROM trades WHERE {where} ORDER BY exit_time DESC LIMIT ?",
+                params
+            )
+            rows = [dict(r) for r in cursor.fetchall()]
+
+            # Progressive loosening: if under half the limit and symbol was
+            # specified, drop symbol filter and backfill
+            if len(rows) < limit // 2 and symbol and (regime or timeframe):
+                existing_ids = {r["id"] for r in rows}
+                fallback_conditions = ["status = 'CLOSED'"]
+                fallback_params = []
+                if regime:
+                    fallback_conditions.append("regime = ?")
+                    fallback_params.append(regime)
+                if timeframe:
+                    fallback_conditions.append("timeframe = ?")
+                    fallback_params.append(timeframe)
+
+                remaining = limit - len(rows)
+                fallback_params.append(remaining)
+                fallback_where = " AND ".join(fallback_conditions)
+                cursor.execute(
+                    f"SELECT * FROM trades WHERE {fallback_where} ORDER BY exit_time DESC LIMIT ?",
+                    fallback_params
+                )
+                extra = [dict(r) for r in cursor.fetchall()
+                         if r["id"] not in existing_ids]
+                rows += extra
+
+            conn.close()
+            return rows
+
+        except Exception as e:
+            logger.error(f"get_trades_by_conditions failed: {e}")
+            return []
+    
     def log_screening(self, data):
         """
         Logs a DeepSeek screening result.

@@ -41,6 +41,66 @@ class TradeAnalyzer:
         self.db = TradeDatabase()
         self.state = StateManager()
         self.client = anthropic.Anthropic(api_key=Config.ANTHROPIC_API_KEY)
+    
+    def get_condition_matched_trades(
+        self,
+        symbol: str = None,
+        regime: str = None,
+        timeframe: str = None,
+        limit: int = 30
+    ) -> tuple[list, str]:
+        """
+        Fetch trades that match the current trading conditions.
+        Tries SurrealDB first for graph-aware retrieval; falls back to
+        the new SQLite condition-matched method; finally falls back to
+        plain recency if all else fails.
+
+        Returns:
+            (trades: list, source: str)  where source is one of:
+              "surrealdb"   — matched by conditions via SurrealDB
+              "sqlite"      — matched by conditions via SQLite
+              "sqlite_recent" — plain recency fallback (no conditions)
+        """
+        from files.surreal_client import SurrealClient
+        surreal = SurrealClient()
+
+        # --- PRIMARY: SurrealDB condition-matched ---
+        try:
+            trades = surreal.query_trades_by_conditions(
+                symbol=symbol,
+                regime=regime,
+                timeframe=timeframe,
+                limit=limit
+            )
+            if trades:
+                logger.info(
+                    f"[SurrealDB] Retrieved {len(trades)} condition-matched trades "
+                    f"(symbol={symbol}, regime={regime}, timeframe={timeframe})"
+                )
+                return trades, "surrealdb"
+            logger.info("[SurrealDB] condition query returned 0 trades — using SQLite fallback")
+        except Exception as e:
+            logger.warning(f"[SurrealDB] condition query failed ({e}) — using SQLite fallback")
+
+        # --- SECONDARY: SQLite condition-matched ---
+        try:
+            trades = self.db.get_trades_by_conditions(
+                symbol=symbol,
+                regime=regime,
+                timeframe=timeframe,
+                limit=limit
+            )
+            if trades:
+                logger.info(
+                    f"[SQLite] Retrieved {len(trades)} condition-matched trades"
+                )
+                return trades, "sqlite"
+        except Exception as e:
+            logger.warning(f"[SQLite] condition query failed ({e})")
+
+        # --- TERTIARY: plain recency (original behaviour) ---
+        logger.info("[SQLite] Falling back to plain recent trades (no conditions)")
+        return self.db.get_recent_trades(limit=50), "sqlite_recent"
         
     def generate_analysis_prompt(self, trades):
         """
@@ -97,17 +157,52 @@ Return a Markdown document with the following sections:
 """
         return prompt
 
-    def run_analysis(self):
-        logger.info("Fetching recent trades...")
-        trades = self.db.get_recent_trades(limit=50)
-        
+    def run_analysis(
+        self,
+        symbol: str = None,
+        regime: str = None,
+        timeframe: str = None
+    ):
+        """
+        Run trade analysis. If symbol/regime/timeframe are provided,
+        fetches condition-matched trades for a targeted report.
+        If called with no args, behaves identically to before (recent 50).
+        """
+        any_conditions = any([symbol, regime, timeframe])
+
+        if any_conditions:
+            logger.info(
+                f"Fetching condition-matched trades "
+                f"(symbol={symbol}, regime={regime}, timeframe={timeframe})..."
+            )
+            trades, source = self.get_condition_matched_trades(
+                symbol=symbol, regime=regime, timeframe=timeframe, limit=30
+            )
+        else:
+            logger.info("Fetching recent trades (no conditions specified)...")
+            trades = self.db.get_recent_trades(limit=50)
+            source = "sqlite_recent"
+
         if not trades:
             logger.info("No closed trades found to analyze.")
             return
 
-        logger.info(f"Analyzing {len(trades)} trades with Opus...")
+        logger.info(f"Analyzing {len(trades)} trades via {source} with Opus...")
         prompt = self.generate_analysis_prompt(trades)
-        
+
+        # Inject retrieval context into prompt header so Opus knows what it
+        # is looking at
+        if any_conditions:
+            filter_desc = ", ".join(
+                f"{k}={v}" for k, v in
+                [("symbol", symbol), ("regime", regime), ("timeframe", timeframe)]
+                if v
+            )
+            prompt = (
+                f"[TARGETED ANALYSIS — conditions: {filter_desc} | "
+                f"source: {source} | n={len(trades)}]\n\n" + prompt
+            )
+
         try:
             message = self.client.messages.create(
                 model=Config.ANALYSIS_MODEL,
@@ -118,9 +213,9 @@ Return a Markdown document with the following sections:
             
             report = message.content[0].text
             
-            # Save report
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"implementation_plan_recommendation_{timestamp}.md"
+            suffix = f"_{symbol}_{regime}".replace("/", "-") if any_conditions else ""
+            filename = f"implementation_plan_recommendation{suffix}_{timestamp}.md"
             filepath = os.path.join(Config.DATA_DIR, filename)
             
             with open(filepath, "w") as f:
@@ -133,5 +228,16 @@ Return a Markdown document with the following sections:
             logger.error(f"Analysis failed: {e}")
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Analyze bot trades")
+    parser.add_argument("--symbol",   default=None, help="e.g. BTC/USDT")
+    parser.add_argument("--regime",   default=None, help="e.g. TRENDING_UP")
+    parser.add_argument("--timeframe", default=None, help="e.g. daily")
+    args = parser.parse_args()
+
     analyzer = TradeAnalyzer()
-    analyzer.run_analysis()
+    analyzer.run_analysis(
+        symbol=args.symbol,
+        regime=args.regime,
+        timeframe=args.timeframe
+    )
