@@ -30,70 +30,70 @@ The bot runs a continuous pipeline every 5 minutes. Here's the complete flow:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                           MAIN PIPELINE LOOP                                 │
+│                           MAIN PIPELINE LOOP                                │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  1. CHECK DAILY LIMITS                                                       │
+│                                                                             │
+│  1. CHECK DAILY LIMITS                                                      │
 │     └─> Reset daily API costs if new day                                    │
-│                                                                              │
+│                                                                             │
 │  2. MANAGE EXISTING POSITIONS                                               │
-│     └─> Check SL/TP for open daily & weekly positions                        │
+│     └─> Check SL/TP for open daily & weekly positions                       │
 │     └─> Close if stop-loss or take-profit hit                               │
-│                                                                              │
+│                                                                             │
 │  3. CHECK WATCHLIST (Priority)                                              │
 │     └─> For each tracked opportunity:                                       │
-│         │                                                                    │
+│         │                                                                   │
 │         ├─► A. FETCH MULTI-TIMEFRAME DATA                                   │
 │         │    └─> Primary TF (1D/1W) + Context TF (4H/1D)                    │
-│         │    └─> Technical Indicators (RSI, BB, MACD, ATR, EMA, ADX)       │
-│         │                                                                    │
+│         │    └─> Technical Indicators (RSI, BB, MACD, ATR, EMA, ADX)        │
+│         │                                                                   │
 │         ├─► B. CHECK RETRACEMENT                                            │
 │         │    └─> Has price entered the FVG/OB zone?                         │
 │         │    └─> If YES → Trigger Analysis                                  │
-│         │                                                                    │
-│         ├─► C. DEEPSEEK SCREENING (DeepSeek R1 via OpenRouter)             │
-│         │    └─> Quick go/no-go decision (30s timeout)                     │
-│         │    └─> Format data as CSV (token efficient)                      │
+│         │                                                                   │
+│         ├─► C. DEEPSEEK SCREENING (DeepSeek R1 via OpenRouter)              │
+│         │    └─> Quick go/no-go decision (30s timeout)                      │
+│         │    └─> Format data as CSV (token efficient)                       │
 │         │    └─> Include market regime + S/R levels                         │
-│         │    └─> Returns: {signal, confidence, proceed_to_full_analysis}   │
+│         │    └─> Returns: {signal, confidence, proceed_to_full_analysis}    │
 │         │    └─> Log screening result to database                           │
-│         │    └─> If proceed=true → Escalate to Opus                        │
-│         │    └─> If proceed=false → Skip Opus, stay on watchlist           │
-│         │                                                                    │
-│         └─► D. OPUS ANALYSIS (Claude Opus 4.5)                             │
-│              └─> Only if DeepSeek approved (proceed=true)                  │
+│         │    └─> If proceed=true → Escalate to Opus                         │
+│         │    └─> If proceed=false → Skip Opus, stay on watchlist            │
+│         │                                                                   │
+│         └─► D. OPUS ANALYSIS (Claude Opus 4.5)                              │
+│              └─> Only if DeepSeek approved (proceed=true)                   │
 │              └─> Format data as CSV (token efficient)                       │
-│              └─> Include market regime + S/R levels                          │
+│              └─> Include market regime + S/R levels                         │
 │              └─> Fetch news sentiment (non-blocking, 15s timeout)           │
 │              └─> LLM returns JSON:                                          │
 │                  {                                                          │
-│                    "signal": "BUY"|"SELL"|"NEUTRAL",                       │
+│                    "signal": "BUY"|"SELL"|"NEUTRAL",                        │
 │                    "confidence": "HIGH"|"MEDIUM"|"LOW",                     │
-│                    "imbalance_type": "DAILY"|"WEEKLY"|"NONE",              │
+│                    "imbalance_type": "DAILY"|"WEEKLY"|"NONE",               │
 │                    "scores": {...},                                         │
-│                    "reasoning": "...",                                       │
-│                    "entry_target": float,                                    │
+│                    "reasoning": "...",                                      │
+│                    "entry_target": float,                                   │
 │                    "stop_loss": float,                                      │
 │                    "take_profit": float                                     │
 │                  }                                                          │
-│              └─> If signal != "BUY"/"SELL" OR confidence != "HIGH" → skip │
+│              └─> If signal != "BUY"/"SELL" OR confidence != "HIGH" → skip   │
 │              └─> Execute trade with regime-based position sizing            │
-│                                                                              │
+│                                                                             │
 │  4. SCAN FOR NEW OPPORTUNITIES (if capacity exists)                         │
-│     └─> For each trading pair:                                             │
-│         │                                                                    │
-│         ├─► A. FETCH MARKET DATA                                           │
-│         │    └─> OHLCV + Technical Indicators                              │
-│         │                                                                    │
-│         ├─► B. DETECT IMBALANCE STRUCTURES                                 │
-│         │    └─> Fair Value Gaps (bullish/bearish)                         │
-│         │    └─> Order Blocks (bullish/bearish)                            │
-│         │    └─> If found → Add to Watchlist                               │
-│         │                                                                    │
+│     └─> For each trading pair:                                              │
+│         │                                                                   │
+│         ├─► A. FETCH MARKET DATA                                            │
+│         │    └─> OHLCV + Technical Indicators                               │
+│         │                                                                   │
+│         ├─► B. DETECT IMBALANCE STRUCTURES                                  │
+│         │    └─> Fair Value Gaps (bullish/bearish)                          │
+│         │    └─> Order Blocks (bullish/bearish)                             │
+│         │    └─> If found → Add to Watchlist                                │
+│         │                                                                   │
 │         └─► C. FALLBACK EXTREME CHECK                                       │
 │              └─> RSI extreme + (volume spike OR extension)                  │
-│              └─> If found → Add to Watchlist                               │
-│                                                                              │
+│              └─> If found → Add to Watchlist                                │
+│                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
