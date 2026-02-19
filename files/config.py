@@ -101,6 +101,9 @@ class Config:
     LOG_FILE = os.path.join(DATA_DIR, "bot.log")
     AGENT_LOG_FILE = os.path.join(DATA_DIR, "agent.log")
 
+    # --- SurrealDB Shadow Layer ---
+    SURREALDB_URL = os.getenv("SURREALDB_URL", "surrealkv://data/surreal.db")
+
     # --- Self-Reflection ---
     BELIEFS_FILE = os.path.join(os.path.dirname(__file__), "data", "beliefs.json")
     BELIEFS_INJECTED_PER_ANALYSIS = 5    # How many relevant beliefs to inject per analysis

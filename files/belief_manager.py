@@ -11,6 +11,7 @@ import logging
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from config import Config
+from surreal_client import SurrealClient
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,7 @@ class BeliefManager:
     def __init__(self):
         self.file_path = Config.BELIEFS_FILE
         self._ensure_file()
+        self.surreal = SurrealClient()
     
     def _ensure_file(self):
         """Create the file and data dir if they don't exist"""
@@ -65,7 +67,23 @@ class BeliefManager:
             # Save back (no pruning - we keep all beliefs forever)
             with open(self.file_path, 'w') as f:
                 json.dump({"beliefs": beliefs}, f, indent=2)
-                
+            
+            # SurrealDB shadow write
+            self.surreal.upsert_belief(
+                belief_id=belief_dict["id"],
+                record={
+                    "timestamp": belief_dict.get("timestamp", time.time()),
+                    "symbol": belief_dict.get("symbol"),
+                    "timeframe": belief_dict.get("timeframe"),
+                    "outcome": belief_dict.get("outcome"),
+                    "pnl_percent": belief_dict.get("pnl_percent"),
+                    "belief": belief_dict.get("belief"),
+                    "tags": belief_dict.get("tags", []),
+                    "confidence_in_belief": belief_dict.get("confidence_in_belief", "MEDIUM")
+                },
+                trade_id=belief_dict.get("trade_id")
+            )
+            
             logger.info(f"Belief added: {belief_dict['id']} - {belief_dict.get('symbol', 'unknown')}")
             
         except Exception as e:

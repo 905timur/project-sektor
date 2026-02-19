@@ -804,7 +804,8 @@ class ImbalanceStrategy:
                         "exit_reason": reason,
                         "regime": pos.get("regime", pos.get("regime_at_entry", "UNKNOWN")),
                         "reason": pos.get("reason", ""),
-                        "analysis_context": pos.get("analysis_context", {})
+                        "analysis_context": pos.get("analysis_context", {}),
+                        "trade_id": str(pos.get("order_id", ""))
                     }
                     belief = self.llm.generate_belief_update(trade_record)
                     if belief:
@@ -871,7 +872,8 @@ class ImbalanceStrategy:
                 "exit_reason": reason,
                 "regime": pos.get("regime", pos.get("regime_at_entry", "UNKNOWN")),
                 "reason": pos.get("reason", ""),
-                "analysis_context": pos.get("analysis_context", {})
+                "analysis_context": pos.get("analysis_context", {}),
+                "trade_id": str(pos.get("order_id", ""))
             }
             belief = self.llm.generate_belief_update(trade_record)
             if belief:

@@ -3,11 +3,13 @@ import os
 import time
 from datetime import datetime
 from config import Config
+from surreal_client import SurrealClient
 
 class StateManager:
     def __init__(self):
         self.file_path = Config.STATE_FILE
         self.state = self._load_state()
+        self.surreal = SurrealClient()
 
     def _load_state(self):
         if os.path.exists(self.file_path):
@@ -66,6 +68,9 @@ class StateManager:
     def save_state(self):
         with open(self.file_path, 'w') as f:
             json.dump(self.state, f, indent=4)
+        
+        # SurrealDB shadow write
+        self.surreal.upsert_state(self.state)
 
     def update_capital(self, amount):
         self.state["capital"]["current"] = amount

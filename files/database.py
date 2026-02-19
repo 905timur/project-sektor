@@ -3,6 +3,7 @@ import sqlite3
 import json
 import time
 from config import Config
+from surreal_client import SurrealClient
 import logging
 
 logger = logging.getLogger(__name__)
@@ -11,6 +12,7 @@ class TradeDatabase:
     def __init__(self):
         self.db_path = Config.DB_FILE
         self._init_db()
+        self.surreal = SurrealClient()
 
     def _get_connection(self):
         return sqlite3.connect(self.db_path)
@@ -111,6 +113,31 @@ class TradeDatabase:
             conn.close()
             logger.info(f"Logged trade entry for {trade_data['symbol']}")
             
+            # SurrealDB shadow write
+            self.surreal.upsert_trade(
+                trade_id=str(trade_data.get("order_id") or str(time.time())),
+                record={
+                    "symbol": trade_data["symbol"],
+                    "timeframe": trade_data["timeframe"],
+                    "side": trade_data["side"],
+                    "entry_price": trade_data["entry_price"],
+                    "exit_price": None,
+                    "size": trade_data["size"],
+                    "pnl": None,
+                    "pnl_percent": None,
+                    "entry_time": trade_data["timestamp"],
+                    "exit_time": None,
+                    "entry_reason": trade_data.get("reason", "Signal"),
+                    "exit_reason": None,
+                    "stop_loss": trade_data["stop_loss"],
+                    "take_profit": trade_data["take_profit"],
+                    "regime": trade_data.get("regime", "UNKNOWN"),
+                    "market_context": trade_data.get("market_context", {}),
+                    "analysis_context": trade_data.get("analysis_context", {}),
+                    "status": "OPEN"
+                }
+            )
+            
         except Exception as e:
             logger.error(f"Failed to log trade entry: {e}")
 
@@ -151,6 +178,19 @@ class TradeDatabase:
             else:
                 conn.commit()
                 logger.info(f"Updated trade exit for ID {trade_id}")
+                
+                # SurrealDB shadow write (partial merge for exit fields only)
+                self.surreal.merge_trade(
+                    trade_id=str(trade_id),
+                    partial={
+                        "exit_price": exit_data["exit_price"],
+                        "exit_time": exit_data.get("exit_time", time.time()),
+                        "exit_reason": exit_data["exit_reason"],
+                        "pnl": exit_data["pnl"],
+                        "pnl_percent": exit_data["pnl_percent"],
+                        "status": "CLOSED"
+                    }
+                )
                 
             conn.close()
             
@@ -219,6 +259,25 @@ class TradeDatabase:
             screening_id = params[0]
             conn.close()
             logger.info(f"Logged screening for {data.get('symbol')} ({data.get('signal')})")
+            
+            # SurrealDB shadow write
+            self.surreal.upsert_screening(
+                screening_id=str(data.get("id") or str(time.time())),
+                record={
+                    "timestamp": data.get("timestamp", time.time()),
+                    "symbol": data.get("symbol"),
+                    "timeframe": data.get("timeframe"),
+                    "model": data.get("model"),
+                    "signal": data.get("signal"),
+                    "confidence": data.get("confidence"),
+                    "reasoning": data.get("reasoning"),
+                    "proceed": bool(data.get("proceed")),
+                    "prompt_tokens": data.get("prompt_tokens", 0),
+                    "completion_tokens": data.get("completion_tokens", 0),
+                    "raw_response": data.get("raw_response", ""),
+                    "escalated_to_opus": False
+                }
+            )
             return screening_id
             
         except Exception as e:
@@ -247,6 +306,9 @@ class TradeDatabase:
             else:
                 conn.commit()
                 logger.info(f"Marked screening {screening_id} as escalated to Opus")
+                
+                # SurrealDB shadow write
+                self.surreal.update_screening_escalated(str(screening_id))
                 
             conn.close()
             

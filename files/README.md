@@ -352,6 +352,11 @@ OPENROUTER_API_KEY=your_openrouter_key  # For DeepSeek screening (free)
 # Notifications
 TELEGRAM_BOT_TOKEN=your_bot_token
 TELEGRAM_CHAT_ID=your_chat_id
+
+# SurrealDB Shadow Layer (optional)
+# Uses embedded KV store by default - no separate server needed
+SURREALDB_URL=surrealkv://data/surreal.db   # embedded (default)
+# SURREALDB_URL=ws://localhost:8000         # standalone server
 ```
 
 ### 3. Run

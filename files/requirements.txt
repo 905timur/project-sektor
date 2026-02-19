@@ -8,3 +8,4 @@ python-telegram-bot
 python-dotenv
 tenacity
 requests
+surrealdb>=1.0.0
