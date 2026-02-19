@@ -174,6 +174,10 @@ The bot runs a continuous pipeline every 5 minutes. Here's the complete flow:
   - Written by Opus after each trade
   - Used in subsequent analysis prompts
   - Mirrored in SurrealDB with graph edges to source trades
+  - **Belief scoring**: Relevance based on regime match, symbol match, timeframe
+    match, and recency
+  - **Injected per analysis**: Up to 5 relevant beliefs injected into each LLM
+    prompt
 
 ---
 
@@ -291,11 +295,106 @@ Two-stage AI analysis for cost optimization:
 | -------------------- | ----------- | ----------------------------------------- |
 | **Daily Cost Limit** | $1.00 max   | Stops LLM calls if API costs exceed limit |
 | **Spread Limit**     | 0.5% max    | Aborts trade if bid-ask spread too wide   |
+| **Min Volume**       | $1M USD min | Aborts trade if 24h volume too low        |
 | **Max Drawdown**     | 10% weekly  | Loss limit to prevent large drawdowns     |
 | **Position Size**    | 45% capital | Leaves buffer for managing positions      |
 | **Paper Trading**    | Default ON  | All trades simulated unless disabled      |
 
 ---
+
+## Trading Session Stats
+
+The bot tracks performance metrics per trading session for funnel analysis:
+
+| Metric                  | Description                                         |
+| ----------------------- | --------------------------------------------------- |
+| **Zones Entered**       | Opportunities that retraced into the imbalance zone |
+| **Rejected (Candle)**   | Failed rejection candle confirmation gate           |
+| **Rejected (Volume)**   | Failed volume confirmation gate                     |
+| **Rejected (DeepSeek)** | DeepSeek pre-screening said no                      |
+| **Rejected (Opus)**     | Claude Opus analysis said no                        |
+| **Trades Executed**     | Successfully executed trades                        |
+
+Sessions are tracked by market hours (Eastern Time):
+
+| Session        | Hours (ET)  |
+| -------------- | ----------- |
+| 🌏 ASIA        | 8 PM - 5 AM |
+| 🇬🇧 LONDON      | 3 AM - 8 AM |
+| 🇬🇧🇺🇸 LONDON/NY | 8 AM - 1 PM |
+| 🇺🇸 NEW YORK    | 1 PM - 5 PM |
+
+Session reports are automatically sent via Telegram when the session changes.
+
+---
+
+## Rejection Filters
+
+Before executing a trade, the bot applies multiple confirmation gates:
+
+### 1. Rejection Candle Confirmation
+
+After price retraces into an imbalance zone, the bot waits for a confirmation
+candle:
+
+- **Bullish Setup**: Next candle must show bullish momentum (close higher than
+  previous)
+- **Bearish Setup**: Next candle must show bearish momentum (close lower than
+  previous)
+
+### 2. Volume Confirmation
+
+The confirmation candle must have above-average volume (>20-period SMA) to
+validate institutional interest.
+
+### 3. DeepSeek Pre-Screening
+
+Free LLM screening layer provides initial go/no-go decision (see DeepSeek
+Pre-Screening Layer section).
+
+---
+
+## AI Position Management
+
+The bot actively manages open positions using AI reviews:
+
+### Review Triggers
+
+| Trigger            | Description                                           |
+| ------------------ | ----------------------------------------------------- |
+| **Danger Zone**    | Price within 0.5% of stop loss                        |
+| **Milestone 1R**   | Position reached 1x risk (100% of SL distance) profit |
+| **Milestone 2R**   | Position reached 2x risk (200% of SL distance) profit |
+| **Stale Position** | 50% of time elapsed with <0.5% profit                 |
+
+### AI Review Cooldowns
+
+| Model        | Cooldown   | Description                                    |
+| ------------ | ---------- | ---------------------------------------------- |
+| **DeepSeek** | 30 minutes | Minimum time between DeepSeek position reviews |
+| **Opus**     | 6 hours    | Minimum time between Opus position reviews     |
+
+### AI Actions
+
+When triggered, AI can:
+
+- Confirm holding the position
+- Suggest a new stop loss (trailing stop optimization)
+- Recommend closing early (take profit or stop loss)
+
+---
+
+## Volume Profile Analysis
+
+The bot analyzes volume distribution to identify high-probability zones:
+
+- **Volume Nodes**: Price levels with high trading activity
+- **Volume Gaps**: Areas with low volume (likely to fill)
+- **Volume Spike Detection**: >2x average volume indicates institutional
+  activity
+
+Volume analysis is used alongside imbalance detection to prioritize
+high-probability setups.
 
 ## Configuration
 
@@ -330,6 +429,24 @@ IMBALANCE_PARAMS = {
 # Paper Trading
 PAPER_TRADING = True
 PAPER_TRADING_INITIAL_BALANCE = 50.0
+PAPER_SLIPPAGE_RATE_MIN = 0.001   # 0.1% minimum slippage
+PAPER_SLIPPAGE_RATE_MAX = 0.005   # 0.5% maximum slippage
+PAPER_FEE_RATE = 0.004            # 0.4% fee per trade
+
+# Volume Filter
+MIN_VOLUME_USD = 1000000          # Minimum 24h volume ($1M)
+
+# AI Position Management
+POSITION_DEEPSEEK_COOLDOWN_SECS = 1800   # 30 minutes
+POSITION_OPUS_COOLDOWN_SECS = 21600      # 6 hours
+POSITION_DANGER_ZONE_PERCENT = 0.5       # 0.5% from SL triggers danger
+POSITION_MILESTONE_1R = 1.0             # First profit milestone
+POSITION_MILESTONE_2R = 2.0             # Second profit milestone
+POSITION_STALE_TIME_THRESHOLD = 0.5      # 50% of time elapsed
+POSITION_STALE_PNL_THRESHOLD = 0.5      # <0.5% gain = stale
+
+# Self-Reflection
+BELIEFS_INJECTED_PER_ANALYSIS = 5   # Beliefs to inject in prompts
 ```
 
 ---
@@ -584,6 +701,8 @@ All trades are logged to SQLite (`data/trades.db`) with:
 | pnl_percent      | Profit/loss percentage      |
 | entry_time       | Unix timestamp of entry     |
 | exit_time        | Unix timestamp of exit      |
+| entry_reason     | Why the trade was entered   |
+| exit_reason      | Why the trade was exited    |
 | stop_loss        | SL price                    |
 | take_profit      | TP price                    |
 | regime           | Market regime at entry      |
@@ -645,10 +764,14 @@ The bot optimizes for low API costs:
 The bot includes a comprehensive paper trading system:
 
 - **Simulated balance tracking** - Starting at $50 by default
-- **Position management** - Tracks paper positions separately
-- **P&L calculation** - Real-time profit/loss tracking
-- **Trade history** - Full history of simulated trades
+- **Position management** - Tracks paper positions separately (daily + weekly)
+- **P&L calculation** - Real-time profit/loss tracking with fees
+- **Trade history** - Full history of simulated trades with duration
 - **Periodic reports** - Every 30 minutes
+- **Slippage simulation** - 0.1% to 0.5% random slippage based on volatility
+- **Fee simulation** - 0.4% Crypto.com spot fee per trade
+- **Unrealized PnL** - Live tracking of open position profit/loss
+- **Win rate tracking** - Tracks winning vs losing trades
 
 ---
 

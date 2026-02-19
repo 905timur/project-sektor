@@ -155,6 +155,11 @@ class ImbalanceStrategy:
                 'rejection_wick_ratio': rejection['wick_ratio']
             }
             
+            # Fetch order book imbalance for real-time confirmation
+            ob_imbalance = self.exchange.get_orderbook_imbalance(symbol)
+            if ob_imbalance:
+                context_extras['orderbook_imbalance'] = ob_imbalance
+            
             # === Stage 1: DeepSeek Screening ===
             screening = self.llm.screen_with_deepseek(symbol, tf_name, df_dict, context_extras)
             

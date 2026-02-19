@@ -32,6 +32,9 @@ class LLMClient:
         self._analysis_system_prompt = None
         self._approval_system_prompt = None
 
+        # Fear & Greed Index cache (60-minute expiry)
+        self._fng_cache = {}
+
         # Setup agent logger
         self._setup_agent_logger()
 
@@ -184,6 +187,51 @@ Overall: {overall} ({confidence} confidence) | {bullish_pct}% bullish, {bearish_
 Headlines:
 {headlines_str}"""
 
+    def get_fear_and_greed(self) -> Dict[str, Any]:
+        """
+        Fetch the Fear & Greed Index from alternative.me API.
+        Uses in-memory cache with 60-minute expiry.
+        
+        Returns:
+            Dict with 'value' (int) and 'label' (str)
+        """
+        # Check if cache is valid (less than 60 minutes old)
+        if self._fng_cache:
+            cached_time = self._fng_cache.get('timestamp', 0)
+            if time.time() - cached_time < 3600:
+                return self._fng_cache.get('data', {'value': 50, 'label': 'Neutral'})
+        
+        # Fetch fresh data
+        try:
+            req = urllib.request.Request(
+                'https://api.alternative.me/fng/?limit=1',
+                headers={'User-Agent': 'Mozilla/5.0'}
+            )
+            with urllib.request.urlopen(req, timeout=5) as response:
+                data = json.loads(response.read().decode('utf-8'))
+                
+            if data and 'data' in data and len(data['data']) > 0:
+                fng_data = data['data'][0]
+                result = {
+                    'value': int(fng_data.get('value', 50)),
+                    'label': fng_data.get('value_classification', 'Neutral')
+                }
+            else:
+                result = {'value': 50, 'label': 'Neutral'}
+                logger.warning("Unexpected F&G API response format")
+                
+        except Exception as e:
+            logger.warning(f"Fear & Greed fetch failed: {e}, using fallback")
+            result = {'value': 50, 'label': 'Neutral'}
+        
+        # Update cache
+        self._fng_cache = {
+            'timestamp': time.time(),
+            'data': result
+        }
+        
+        return result
+
     def _get_analysis_system_prompt(self, symbol, timeframe):
         """
         Returns the cached system prompt for analysis (Opus Enhanced).
@@ -210,6 +258,24 @@ WEEKLY IMBALANCE (Long-term, ~1 week hold):
 - Setup: Major move creates large imbalance zone, price retraces into it
 - Entry: Strong rejection from zone
 - Target: Major structure level or 3-4x risk
+
+**ORDER BOOK IMBALANCE:**
+
+Real-time bid/ask volume ratios at top 1, 5, and 10 price levels. A ratio > 1.0 means more bid volume (buying pressure). Micro-price is the volume-weighted mid-price, more accurate than simple (bid+ask)/2.
+
+Guidance:
+- Use order book imbalance as a real-time confirmation of momentum direction, not as a standalone signal. A bullish FVG setup with top-5 imbalance > 1.4 is meaningfully stronger than one with balanced books.
+- Strong Ask Pressure (top-5 < 0.7) during a bullish retracement setup is a caution flag — wait for absorption or reduce confidence.
+- Do not override structure signals purely on imbalance. Order books are short-lived; imbalance zones are structural.
+
+**FEAR & GREED INDEX:**
+
+Daily crypto market sentiment index (0-100). Updated once per day.
+- 0-25 = Extreme Fear
+- 26-45 = Fear
+- 46-55 = Neutral
+- 56-75 = Greed
+- 76-100 = Extreme Greed
 
 **OUTPUT FORMAT:**
 
@@ -239,6 +305,9 @@ Return ONLY valid JSON:
 - If no clear imbalance zone exists, return NEUTRAL
 - Daily positions stop < 3% away, Weekly stop < 7% away
 - Risk:Reward must be > 1.5 (Daily) or > 3.0 (Weekly)
+- Extreme Fear (0–25) combined with a strong bullish imbalance setup = elevated conviction for longs (market is oversold at a structural level)
+- Extreme Greed (76–100) combined with a bearish imbalance = elevated conviction for shorts / tighter sizing for longs
+- Do not override a clearly broken structure just because of F&G — it is a filter, not a signal
 
 **POSITION SIZING PHILOSOPHY:**
 
@@ -292,6 +361,20 @@ Rules:
                 
                 extras_str = f"\\nMARKET CONTEXT:\\nRegime: {regime}\\nKey Supports: {', '.join(supports)}\\nKey Resistances: {', '.join(resistances)}"
                 
+                # Add order book imbalance if available
+                ob = context_extras.get('orderbook_imbalance')
+                if ob:
+                    extras_str += (
+                        f"\nORDER BOOK IMBALANCE:"
+                        f"\n  Top-1:  {ob['top1_imbalance']}x"
+                        f"\n  Top-5:  {ob['top5_imbalance']}x  ({ob['label']})"
+                        f"\n  Top-10: {ob['top10_imbalance']}x"
+                        f"\n  Micro-price: {ob['micro_price']}"
+                    )
+                
+                # Add Fear & Greed Index
+                fng = self.get_fear_and_greed()
+                extras_str += f"\nFEAR & GREED INDEX: {fng['value']}/100 ({fng['label']})"
         except Exception as e:
             logger.error(f"Error preparing market data: {e}")
             return None
@@ -416,6 +499,21 @@ Rules:
                 supports = [str(l['price']) for l in sr.get('support', [])[:3]]
                 resistances = [str(l['price']) for l in sr.get('resistance', [])[:3]]
                 extras_str = f"\nMARKET CONTEXT:\nRegime: {regime}\nKey Supports: {', '.join(supports)}\nKey Resistances: {', '.join(resistances)}"
+                
+                # Add order book imbalance if available
+                ob = context_extras.get('orderbook_imbalance')
+                if ob:
+                    extras_str += (
+                        f"\nORDER BOOK IMBALANCE:"
+                        f"\n  Top-1:  {ob['top1_imbalance']}x"
+                        f"\n  Top-5:  {ob['top5_imbalance']}x  ({ob['label']})"
+                        f"\n  Top-10: {ob['top10_imbalance']}x"
+                        f"\n  Micro-price: {ob['micro_price']}"
+                    )
+                
+                # Add Fear & Greed Index
+                fng = self.get_fear_and_greed()
+                extras_str += f"\nFEAR & GREED INDEX: {fng['value']}/100 ({fng['label']})"
                 
         except Exception as e:
             logger.error(f"Error preparing market data for DeepSeek: {e}")
