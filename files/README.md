@@ -1,5 +1,18 @@
 # Imbalance Trading Bot (Survival Mode)
 
+> **⚠️ IMPORTANT: This bot is for educational and research purposes only.**
+>
+> - **Not Financial Advice**: This software is not investment advice, financial
+>   advice, or trading advice.
+> - **High Risk**: Trading cryptocurrencies carries substantial risk of loss.
+>   You can lose your entire investment.
+> - **Past Performance**: Past performance does not guarantee future results.
+> - **Paper Trading Default**: This bot runs in paper trading mode by default
+>   for a reason. Always test thoroughly with paper trading before using real
+>   funds.
+> - **Use at Your Own Risk**: The author(s) are not responsible for any losses
+>   incurred while using this software.
+
 A Python-based crypto trading bot that identifies and trades **imbalance
 patterns** (Fair Value Gaps and Order Blocks) in cryptocurrency markets using
 AI-powered analysis. The bot is designed for capital preservation with strict
@@ -254,6 +267,18 @@ Headlines:
 ...
 ```
 
+### Fear & Greed Index
+
+The bot fetches the daily Fear & Greed Index from alternative.me API:
+
+- **0-25**: Extreme Fear (elevated conviction for longs)
+- **26-45**: Fear
+- **46-55**: Neutral
+- **56-75**: Greed
+- **76-100**: Extreme Greed (elevated conviction for shorts / tighter sizing)
+
+This index is included in LLM prompts to inform trading decisions.
+
 ### 8. DeepSeek Pre-Screening Layer
 
 Two-stage AI analysis for cost optimization:
@@ -300,6 +325,18 @@ Two-stage AI analysis for cost optimization:
 | **Position Size**    | 45% capital | Leaves buffer for managing positions      |
 | **Paper Trading**    | Default ON  | All trades simulated unless disabled      |
 
+### Order Book Imbalance
+
+The bot fetches real-time order book data to measure buying/selling pressure:
+
+- **Top-1 Imbalance**: Best bid vs best ask volume ratio
+- **Top-5 Imbalance**: Sum of top 5 bids vs asks
+- **Top-10 Imbalance**: Sum of top 10 bids vs asks
+- **Micro-Price**: Volume-weighted mid-price for more accurate pricing
+
+Labels: Strong Bid Pressure (≥1.5x), Mild Bid Pressure (≥1.15x), Balanced, Mild
+Ask Pressure (≤0.87x), Strong Ask Pressure (≤0.67x)
+
 ---
 
 ## Trading Session Stats
@@ -335,12 +372,21 @@ Before executing a trade, the bot applies multiple confirmation gates:
 ### 1. Rejection Candle Confirmation
 
 After price retraces into an imbalance zone, the bot waits for a confirmation
-candle:
+candle with a valid rejection pattern:
 
-- **Bullish Setup**: Next candle must show bullish momentum (close higher than
-  previous)
-- **Bearish Setup**: Next candle must show bearish momentum (close lower than
-  previous)
+**Bullish Setups** (price dropping into bullish zone):
+
+- **Hammer/Pin Bar**: Lower wick ≥2x candle body, small upper wick
+- **Dragonfly Doji**: Body <30% of range, lower wick >60% of range
+- **Bullish Engulfing**: Current bullish candle fully engulfs previous bearish
+  body
+
+**Bearish Setups** (price rising into bearish zone):
+
+- **Shooting Star**: Upper wick ≥2x candle body, small lower wick
+- **Gravestone Doji**: Body <30% of range, upper wick >60% of range
+- **Bearish Engulfing**: Current bearish candle fully engulfs previous bullish
+  body
 
 ### 2. Volume Confirmation
 
@@ -366,6 +412,8 @@ The bot actively manages open positions using AI reviews:
 | **Milestone 1R**   | Position reached 1x risk (100% of SL distance) profit |
 | **Milestone 2R**   | Position reached 2x risk (200% of SL distance) profit |
 | **Stale Position** | 50% of time elapsed with <0.5% profit                 |
+| **Regime Change**  | Market regime shifted from entry conditions           |
+| **Sentiment Flip** | News sentiment reversed from entry                    |
 
 ### AI Review Cooldowns
 
@@ -381,6 +429,16 @@ When triggered, AI can:
 - Confirm holding the position
 - Suggest a new stop loss (trailing stop optimization)
 - Recommend closing early (take profit or stop loss)
+
+### Position Exit Rules
+
+The bot manages positions with automated rules:
+
+| Rule              | Daily Positions                     | Weekly Positions                    |
+| ----------------- | ----------------------------------- | ----------------------------------- |
+| **Break-Even**    | >1.5% profit → SL to entry          | >3.0% profit → SL to entry          |
+| **Trailing Stop** | >3% profit → Trail at -2% from peak | >5% profit → Trail at -3% from peak |
+| **Time Exit**     | 48h with <1% profit                 | 336h (14 days) with <2% profit      |
 
 ---
 

@@ -1,0 +1,345 @@
+{% extends "base.html" %}
+
+{% block title %}Settings - Imbalance Bot{% endblock %}
+
+{% block content %}
+<div x-data="settings()" class="space-y-6">
+    
+    <!-- Header -->
+    <div>
+        <h1 class="text-2xl font-bold text-white">Settings</h1>
+        <p class="text-dark-400 text-sm mt-1">Configure API keys, trading parameters, and risk management</p>
+    </div>
+    
+    <!-- Settings Form -->
+    <form 
+        hx-post="/settings" 
+        hx-target="#settings-form"
+        hx-swap="outerHTML"
+        class="space-y-6"
+        id="settings-form">
+        
+        <!-- General Error -->
+        {% if errors._general %}
+        <div class="bg-red-600/20 border border-red-600/30 rounded-lg p-4 text-red-400">
+            <p>{{ errors._general }}</p>
+        </div>
+        {% endif %}
+        
+        <!-- Exchange Section -->
+        <div class="bg-dark-800 rounded-lg border border-dark-700 overflow-hidden">
+            <div class="px-4 py-3 border-b border-dark-700">
+                <h2 class="text-lg font-semibold text-white">Exchange</h2>
+                <p class="text-dark-400 text-sm">Crypto.com API credentials</p>
+            </div>
+            <div class="p-4 space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-dark-300 mb-1">API Key</label>
+                    <div class="relative">
+                        <input 
+                            type="password" 
+                            name="CRYPTO_COM_API_KEY" 
+                            x-ref="crypto_com_api_key"
+                            :type="revealedFields.crypto_com_api_key ? 'text' : 'password'"
+                            value="{{ config.CRYPTO_COM_API_KEY }}"
+                            class="w-full bg-dark-900 border border-dark-600 rounded-lg px-4 py-2 text-white pr-10 focus:outline-none focus:border-emerald-500">
+                        <button 
+                            type="button"
+                            @click="toggleReveal('crypto_com_api_key')"
+                            class="absolute right-2 top-1/2 -translate-y-1/2 text-dark-400 hover:text-white">
+                            <svg x-show="!revealedFields.crypto_com_api_key" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                            </svg>
+                            <svg x-show="revealedFields.crypto_com_api_key" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"></path>
+                            </svg>
+                        </button>
+                    </div>
+                    {% if errors.CRYPTO_COM_API_KEY %}
+                    <p class="text-red-400 text-sm mt-1">{{ errors.CRYPTO_COM_API_KEY }}</p>
+                    {% endif %}
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium text-dark-300 mb-1">API Secret</label>
+                    <div class="relative">
+                        <input 
+                            type="password" 
+                            name="CRYPTO_COM_API_SECRET" 
+                            x-ref="crypto_com_api_secret"
+                            :type="revealedFields.crypto_com_api_secret ? 'text' : 'password'"
+                            value="{{ config.CRYPTO_COM_API_SECRET }}"
+                            class="w-full bg-dark-900 border border-dark-600 rounded-lg px-4 py-2 text-white pr-10 focus:outline-none focus:border-emerald-500">
+                        <button 
+                            type="button"
+                            @click="toggleReveal('crypto_com_api_secret')"
+                            class="absolute right-2 top-1/2 -translate-y-1/2 text-dark-400 hover:text-white">
+                            <svg x-show="!revealedFields.crypto_com_api_secret" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                            </svg>
+                            <svg x-show="revealedFields.crypto_com_api_secret" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"></path>
+                            </svg>
+                        </button>
+                    </div>
+                    {% if errors.CRYPTO_COM_API_SECRET %}
+                    <p class="text-red-400 text-sm mt-1">{{ errors.CRYPTO_COM_API_SECRET }}</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        
+        <!-- AI Models Section -->
+        <div class="bg-dark-800 rounded-lg border border-dark-700 overflow-hidden">
+            <div class="px-4 py-3 border-b border-dark-700">
+                <h2 class="text-lg font-semibold text-white">AI Models</h2>
+                <p class="text-dark-400 text-sm">Configure LLM providers for screening and analysis</p>
+            </div>
+            <div class="p-4 space-y-4">
+                <!-- OpenRouter API Key -->
+                <div>
+                    <label class="block text-sm font-medium text-dark-300 mb-1">OpenRouter API Key (DeepSeek)</label>
+                    <div class="relative">
+                        <input 
+                            type="password" 
+                            name="OPENROUTER_API_KEY" 
+                            x-ref="openrouter_api_key"
+                            :type="revealedFields.openrouter_api_key ? 'text' : 'password'"
+                            value="{{ config.OPENROUTER_API_KEY }}"
+                            class="w-full bg-dark-900 border border-dark-600 rounded-lg px-4 py-2 text-white pr-10 focus:outline-none focus:border-emerald-500">
+                        <button 
+                            type="button"
+                            @click="toggleReveal('openrouter_api_key')"
+                            class="absolute right-2 top-1/2 -translate-y-1/2 text-dark-400 hover:text-white">
+                            <svg x-show="!revealedFields.openrouter_api_key" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                            </svg>
+                            <svg x-show="revealedFields.openrouter_api_key" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"></path>
+                            </svg>
+                        </button>
+                    </div>
+                    {% if errors.OPENROUTER_API_KEY %}
+                    <p class="text-red-400 text-sm mt-1">{{ errors.OPENROUTER_API_KEY }}</p>
+                    {% endif %}
+                </div>
+                
+                <!-- Anthropic API Key -->
+                <div>
+                    <label class="block text-sm font-medium text-dark-300 mb-1">Anthropic API Key (Claude)</label>
+                    <div class="relative">
+                        <input 
+                            type="password" 
+                            name="ANTHROPIC_API_KEY" 
+                            x-ref="anthropic_api_key"
+                            :type="revealedFields.anthropic_api_key ? 'text' : 'password'"
+                            value="{{ config.ANTHROPIC_API_KEY }}"
+                            class="w-full bg-dark-900 border border-dark-600 rounded-lg px-4 py-2 text-white pr-10 focus:outline-none focus:border-emerald-500">
+                        <button 
+                            type="button"
+                            @click="toggleReveal('anthropic_api_key')"
+                            class="absolute right-2 top-1/2 -translate-y-1/2 text-dark-400 hover:text-white">
+                            <svg x-show="!revealedFields.anthropic_api_key" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                            </svg>
+                            <svg x-show="revealedFields.anthropic_api_key" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"></path>
+                            </svg>
+                        </button>
+                    </div>
+                    {% if errors.ANTHROPIC_API_KEY %}
+                    <p class="text-red-400 text-sm mt-1">{{ errors.ANTHROPIC_API_KEY }}</p>
+                    {% endif %}
+                </div>
+                
+                <!-- Model Names -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-dark-300 mb-1">DeepSeek Model</label>
+                        <input 
+                            type="text" 
+                            name="DEEPSEEK_MODEL" 
+                            value="{{ config.DEEPSEEK_MODEL }}"
+                            class="w-full bg-dark-900 border border-dark-600 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-emerald-500">
+                        {% if errors.DEEPSEEK_MODEL %}
+                        <p class="text-red-400 text-sm mt-1">{{ errors.DEEPSEEK_MODEL }}</p>
+                        {% endif %}
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-dark-300 mb-1">Opus Model</label>
+                        <input 
+                            type="text" 
+                            name="OPUS_MODEL" 
+                            value="{{ config.OPUS_MODEL }}"
+                            class="w-full bg-dark-900 border border-dark-600 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-emerald-500">
+                        {% if errors.OPUS_MODEL %}
+                        <p class="text-red-400 text-sm mt-1">{{ errors.OPUS_MODEL }}</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Screening Section -->
+        <div class="bg-dark-800 rounded-lg border border-dark-700 overflow-hidden">
+            <div class="px-4 py-3 border-b border-dark-700">
+                <h2 class="text-lg font-semibold text-white">Screening</h2>
+                <p class="text-dark-400 text-sm">Configure market screening parameters</p>
+            </div>
+            <div class="p-4 space-y-4">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-dark-300 mb-1">Min Volume (USD)</label>
+                        <input 
+                            type="number" 
+                            name="SCREENING_MIN_VOLUME_USD" 
+                            value="{{ config.SCREENING_MIN_VOLUME_USD }}"
+                            step="100000"
+                            class="w-full bg-dark-900 border border-dark-600 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-emerald-500">
+                        {% if errors.SCREENING_MIN_VOLUME_USD %}
+                        <p class="text-red-400 text-sm mt-1">{{ errors.SCREENING_MIN_VOLUME_USD }}</p>
+                        {% endif %}
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-dark-300 mb-1">Min Imbalance %</label>
+                        <input 
+                            type="number" 
+                            name="SCREENING_MIN_IMBALANCE_PCT" 
+                            value="{{ config.SCREENING_MIN_IMBALANCE_PCT }}"
+                            step="0.01"
+                            class="w-full bg-dark-900 border border-dark-600 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-emerald-500">
+                        {% if errors.SCREENING_MIN_IMBALANCE_PCT %}
+                        <p class="text-red-400 text-sm mt-1">{{ errors.SCREENING_MIN_IMBALANCE_PCT }}</p>
+                        {% endif %}
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-dark-300 mb-1">Interval (seconds)</label>
+                        <input 
+                            type="number" 
+                            name="SCREENING_INTERVAL_SECONDS" 
+                            value="{{ config.SCREENING_INTERVAL_SECONDS }}"
+                            step="1"
+                            class="w-full bg-dark-900 border border-dark-600 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-emerald-500">
+                        {% if errors.SCREENING_INTERVAL_SECONDS %}
+                        <p class="text-red-400 text-sm mt-1">{{ errors.SCREENING_INTERVAL_SECONDS }}</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Risk Management Section -->
+        <div class="bg-dark-800 rounded-lg border border-dark-700 overflow-hidden">
+            <div class="px-4 py-3 border-b border-dark-700">
+                <h2 class="text-lg font-semibold text-white">Risk Management</h2>
+                <p class="text-dark-400 text-sm">Configure position sizing and limits</p>
+            </div>
+            <div class="p-4 space-y-4">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-dark-300 mb-1">Max Position Size (USD)</label>
+                        <input 
+                            type="number" 
+                            name="MAX_POSITION_SIZE_USD" 
+                            value="{{ config.MAX_POSITION_SIZE_USD }}"
+                            step="1"
+                            class="w-full bg-dark-900 border border-dark-600 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-emerald-500">
+                        {% if errors.MAX_POSITION_SIZE_USD %}
+                        <p class="text-red-400 text-sm mt-1">{{ errors.MAX_POSITION_SIZE_USD }}</p>
+                        {% endif %}
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-dark-300 mb-1">Max Open Positions</label>
+                        <input 
+                            type="number" 
+                            name="MAX_OPEN_POSITIONS" 
+                            value="{{ config.MAX_OPEN_POSITIONS }}"
+                            step="1"
+                            class="w-full bg-dark-900 border border-dark-600 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-emerald-500">
+                        {% if errors.MAX_OPEN_POSITIONS %}
+                        <p class="text-red-400 text-sm mt-1">{{ errors.MAX_OPEN_POSITIONS }}</p>
+                        {% endif %}
+                    </div>
+                </div>
+                
+                <div>
+                    <label class="flex items-center gap-3 cursor-pointer">
+                        <input 
+                            type="checkbox" 
+                            name="PAPER_TRADING" 
+                            {% if config.PAPER_TRADING %}checked{% endif %}
+                            value="true"
+                            class="w-5 h-5 bg-dark-900 border-dark-600 rounded text-emerald-500 focus:ring-emerald-500 focus:ring-offset-dark-800">
+                        <span class="text-sm font-medium text-dark-300">Paper Trading Mode</span>
+                    </label>
+                    <p class="text-dark-500 text-sm mt-1 ml-8">When enabled, no real trades will be executed</p>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Submit Button -->
+        <div class="flex justify-end">
+            <button 
+                type="submit"
+                class="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium transition-colors">
+                Save Settings
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function settings() {
+    return {
+        revealedFields: {
+            crypto_com_api_key: false,
+            crypto_com_api_secret: false,
+            openrouter_api_key: false,
+            anthropic_api_key: false
+        },
+        
+        async toggleReveal(field) {
+            // Toggle local state
+            this.revealedFields[field] = !this.revealedFields[field];
+            
+            // If we're showing the field, fetch the actual value from server
+            if (this.revealedFields[field]) {
+                const fieldMap = {
+                    'crypto_com_api_key': 'CRYPTO_COM_API_KEY',
+                    'crypto_com_api_secret': 'CRYPTO_COM_API_SECRET',
+                    'openrouter_api_key': 'OPENROUTER_API_KEY',
+                    'anthropic_api_key': 'ANTHROPIC_API_KEY'
+                };
+                
+                const envField = fieldMap[field];
+                if (envField) {
+                    try {
+                        const response = await fetch(`/settings/reveal?field=${envField}`);
+                        const data = await response.json();
+                        if (data.value) {
+                            this.$refs[field].value = data.value;
+                        }
+                    } catch (error) {
+                        console.error('Failed to reveal API key:', error);
+                    }
+                }
+            }
+        }
+    };
+}
+
+// Listen for HTMX response to show toast
+document.addEventListener('htmx:afterSwap', (event) => {
+    const content = event.detail.target.innerHTML;
+    if (content.includes('toast')) {
+        // Toast is already in the response
+    }
+});
+</script>
+{% endblock %}

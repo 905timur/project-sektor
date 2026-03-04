@@ -47,6 +47,14 @@ venv.bak/
 # State/Data
 data/bot_state.json
 
+# Database files
+*.db
+files/data/trades.db
+files/data/bot.log
+files/data/news.js
+data/
+files/data/
+
 # OS
 .DS_Store
 Thumbs.db
