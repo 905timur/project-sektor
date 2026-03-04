@@ -1,5 +1,7 @@
 # Project Sektor | Dual-tier Autonomous Trading System
 
+![project sektor](https://github.com/905timur/project-sektor/blob/main/projectsektor.jpg)
+
 > **⚠️ IMPORTANT: This bot is for educational and research purposes only.** A
 > Python-based crypto trading bot that identifies and trades **imbalance
 > patterns** (Fair Value Gaps and Order Blocks) in cryptocurrency markets using
