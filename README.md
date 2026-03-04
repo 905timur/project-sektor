@@ -117,7 +117,7 @@ Key settings in [`files/config.py`](files/config.py):
 
 ## Documentation
 
-See repository [WIKI.md](WIKI.md) for detailed documentation.
+See repository wiki for detailed documentation.
 
 ## License
 
