@@ -58,3 +58,6 @@ files/data/
 # OS
 .DS_Store
 Thumbs.db
+
+# Documentation
+WIKI.md

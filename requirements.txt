@@ -1,0 +1,18 @@
+# Core trading bot dependencies
+ccxt
+pandas
+pandas-ta
+scipy
+statsmodels
+anthropic
+python-telegram-bot
+python-dotenv
+tenacity
+requests
+surrealdb>=1.0.0
+
+# Web UI dependencies
+fastapi
+uvicorn
+jinja2
+httpx
